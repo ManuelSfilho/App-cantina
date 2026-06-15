@@ -538,6 +538,14 @@ async function carregarProdutos(){
 
 }
 
+async function carregarCaixas(){
+
+  caixas =
+    await api('listarCaixas');
+
+  updateCaixaStatusUI();
+
+}
 // =====================================================
 // STATE
 // =====================================================
@@ -552,6 +560,8 @@ let notifyTarget=null; // cliente sendo notificado
 let clientes = [];
 let funcionarios = [];
 let produtos = [];
+let caixas = [];
+let vendas = [];
 
 // =====================================================
 // UTILS
@@ -664,11 +674,13 @@ setLoading('Verificando alertas...',75);
   await new Promise(r=>setTimeout(r,400));
   hideLoading();
 
-  await carregarFuncionarios();
-
-  await carregarProdutos();
+   await carregarProdutos();
 
   await carregarClientes();
+
+  await carregarFuncionarios();
+
+  await carregarCaixas();
 
   refreshFuncSelect();
 
@@ -846,21 +858,107 @@ function loginFuncionario(){
 }
 
 function loginAdmin(){
-  const pass=document.getElementById('inAdminPass').value;
-  if(pass!==DB.get('adminPass')){toast('❌ Senha incorreta');return;}
-  currentUser={id:0,nome:'Admin',role:'admin'};
-  caixaAtual=getCurrentCaixa();
+
+  const pass =
+    document.getElementById('inAdminPass').value;
+
+  if(pass !== 'admin123'){
+    toast('❌ Senha incorreta');
+    return;
+  }
+
+  currentUser = {
+    id:0,
+    nome:'Admin',
+    role:'admin'
+  };
+
+  caixaAtual = getCurrentCaixa();
+
   refreshAdminPanels();
+
   showScreen('adminScreen');
+
   toast('✅ Bem-vindo, Admin!');
+
 }
 
 // =====================================================
 // CAIXA
 // =====================================================
 function getCurrentCaixa(){
-  const caixas=DB.get('caixas')||[];
   return caixas.find(c=>!c.fechamento)||null;
+}
+
+function confirmarAbrirCaixa(){
+
+  const val =
+    parseFloat(document.getElementById('caixaInicial').value)||0;
+
+  const novo = {
+    id:uuid(),
+    abertura:ts(),
+    valorInicial:val,
+    fechamento:null,
+    funcionario:currentUser?.nome||'Admin'
+  };
+
+  caixas.push(novo);
+
+  caixaAtual = novo;
+
+  updateCaixaBtn();
+  updateCaixaWarnBanner();
+
+  closeModal('caixaModal');
+
+  toast('✅ Caixa aberto!');
+
+  updateCaixaStatusUI();
+}
+
+function fecharCaixa(){
+
+  if(!caixaAtual){
+    toast('Nenhum caixa aberto');
+    return;
+  }
+
+  const vendasCaixa =
+    vendas.filter(v=>v.caixaId===caixaAtual.id);
+
+  const totalGeral =
+    vendasCaixa.reduce((s,v)=>s+v.total,0);
+
+  const byMethod = {
+    dinheiro:0,
+    debito:0,
+    credito:0,
+    pix:0,
+    fiado:0
+  };
+
+  vendasCaixa.forEach(v=>{
+    if(byMethod[v.pagamento]!==undefined){
+      byMethod[v.pagamento]+=v.total;
+    }
+  });
+
+  let html = `
+  <div style="text-align:center;margin-bottom:14px">
+    <div style="font-size:12px;color:var(--muted)">Total Geral</div>
+    <div style="font-size:32px;font-weight:800;color:var(--amber)">
+      ${fmt(totalGeral)}
+    </div>
+    <div style="font-size:12px;color:var(--muted)">
+      ${vendasCaixa.length} venda(s)
+    </div>
+  </div>`;
+
+  document.getElementById('fechamentoResumo').innerHTML =
+    html;
+
+  showModal('fecharCaixaModal');
 }
 function updateCaixaBtn(){
   const el=document.getElementById('btnCaixaLabel');
@@ -881,78 +979,244 @@ function abrirCaixa(){
   showModal('caixaModal');
 }
 function confirmarAbrirCaixa(){
-  const val=parseFloat(document.getElementById('caixaInicial').value)||0;
-  const caixas=DB.get('caixas')||[];
-  const novo={id:uuid(),abertura:ts(),valorInicial:val,fechamento:null,funcionario:currentUser?.nome||'Admin'};
-  caixas.push(novo);DB.set('caixas',caixas);
-  caixaAtual=novo;
-  updateCaixaBtn();updateCaixaWarnBanner();
-  closeModal('caixaModal');
-  toast('✅ Caixa aberto!');
-  updateCaixaStatusUI();
-}
-function fecharCaixa(){
-  if(!caixaAtual){toast('Nenhum caixa aberto');return;}
-  const vendas=(DB.get('vendas')||[]).filter(v=>v.caixaId===caixaAtual.id);
-  const totalGeral=vendas.reduce((s,v)=>s+v.total,0);
-  const byMethod={dinheiro:0,debito:0,credito:0,pix:0,fiado:0};
-  vendas.forEach(v=>{if(byMethod[v.pagamento]!==undefined)byMethod[v.pagamento]+=v.total;});
-  let html=`<div style="text-align:center;margin-bottom:14px">
-    <div style="font-size:12px;color:var(--muted)">Total Geral</div>
-    <div style="font-size:32px;font-weight:800;color:var(--amber)">${fmt(totalGeral)}</div>
-    <div style="font-size:12px;color:var(--muted)">${vendas.length} venda(s)</div>
-  </div>
-  <div class="pay-summary-grid">
-    <div class="pay-summary-card"><div class="ps-label">💵 Dinheiro</div><div class="ps-value" style="color:var(--green)">${fmt(byMethod.dinheiro)}</div></div>
-    <div class="pay-summary-card"><div class="ps-label">💳 Débito</div><div class="ps-value" style="color:var(--blue)">${fmt(byMethod.debito)}</div></div>
-    <div class="pay-summary-card"><div class="ps-label">💎 Crédito</div><div class="ps-value" style="color:var(--purple)">${fmt(byMethod.credito)}</div></div>
-    <div class="pay-summary-card"><div class="ps-label">⚡ Pix</div><div class="ps-value" style="color:var(--amber)">${fmt(byMethod.pix)}</div></div>
-    <div class="pay-summary-card" style="grid-column:1/-1"><div class="ps-label">🪙 Crédito Cliente</div><div class="ps-value" style="color:var(--muted)">${fmt(byMethod.fiado)}</div></div>
-  </div>`;
-  document.getElementById('fechamentoResumo').innerHTML=html;
-  showModal('fecharCaixaModal');
-}
-function confirmarFecharEnviarPDF(){
-  if(!caixaAtual)return;
-  const caixas=DB.get('caixas')||[];
-  const idx=caixas.findIndex(c=>c.id===caixaAtual.id);
-  if(idx>=0){caixas[idx].fechamento=ts();DB.set('caixas',caixas);}
-  gerarRelatorioFechamentoPDF(caixaAtual,true);
-  caixaAtual=null;
-  updateCaixaBtn();updateCaixaWarnBanner();
-  closeModal('fecharCaixaModal');
-  updateCaixaStatusUI();
-  toast('✅ Caixa fechado! PDF gerado e WhatsApp aberto.');
-}
-function updateCaixaStatusUI(){
-  const cx=getCurrentCaixa();
-  const dot=document.getElementById('caixaDot');
-  if(!dot)return;
-  if(cx){
-    dot.className='caixa-dot open';
-    document.getElementById('caixaStatusLabel').textContent='Caixa Aberto';
-    document.getElementById('caixaStatusSub').textContent='Aberto em '+dateStr(cx.abertura)+' por '+cx.funcionario;
-  } else {
-    dot.className='caixa-dot closed';
-    document.getElementById('caixaStatusLabel').textContent='Caixa Fechado';
-    document.getElementById('caixaStatusSub').textContent='Nenhum caixa aberto';
+
+  const val =
+    parseFloat(document.getElementById('caixaInicial').value) || 0;
+
+  const novo = {
+    id: uuid(),
+    abertura: ts(),
+    valorInicial: val,
+    fechamento: null,
+    funcionario: currentUser?.nome || 'Admin'
+  };
+
+  if(!window.caixas){
+    window.caixas = [];
   }
-  const tbody=document.getElementById('caixaTbody');
-  if(!tbody)return;
-  const caixas=(DB.get('caixas')||[]).slice().reverse();
-  tbody.innerHTML=caixas.map(c=>{
-    const vendas=(DB.get('vendas')||[]).filter(v=>v.caixaId===c.id);
-    const tot=vendas.reduce((s,v)=>s+v.total,0);
-    return `<tr>
-      <td>${dateOnly(c.abertura)}</td>
-      <td>${fmt(c.valorInicial)}</td>
-      <td>${c.fechamento?dateStr(c.fechamento):'-'}</td>
-      <td>${vendas.length}</td>
-      <td style="font-weight:700;color:var(--amber)">${fmt(tot)}</td>
-      <td><span class="badge ${c.fechamento?'badge-muted':'badge-green'}">${c.fechamento?'Fechado':'Aberto'}</span></td>
-      <td><button class="btn btn-ghost btn-sm" onclick="exportCaixaPDF('${c.id}')">📄 PDF</button></td>
-    </tr>`;
-  }).join('')||'<tr><td colspan="7" style="color:var(--muted);text-align:center">Nenhum caixa registrado</td></tr>';
+
+  window.caixas.push(novo);
+
+  caixaAtual = novo;
+
+  updateCaixaBtn();
+  updateCaixaWarnBanner();
+
+  closeModal('caixaModal');
+
+  toast('✅ Caixa aberto!');
+
+  updateCaixaStatusUI();
+
+}
+
+function fecharCaixa(){
+
+  if(!caixaAtual){
+    toast('Nenhum caixa aberto');
+    return;
+  }
+
+  const vendasCaixa =
+    (vendas || []).filter(
+      v => v.caixaId === caixaAtual.id
+    );
+
+  const totalGeral =
+    vendasCaixa.reduce(
+      (s,v) => s + Number(v.total || 0),
+      0
+    );
+
+  const byMethod = {
+    dinheiro:0,
+    debito:0,
+    credito:0,
+    pix:0,
+    fiado:0
+  };
+
+  vendasCaixa.forEach(v => {
+    if(byMethod[v.pagamento] !== undefined){
+      byMethod[v.pagamento] += Number(v.total || 0);
+    }
+  });
+
+  let html = `
+  <div style="text-align:center;margin-bottom:14px">
+    <div style="font-size:12px;color:var(--muted)">
+      Total Geral
+    </div>
+    <div style="font-size:32px;font-weight:800;color:var(--amber)">
+      ${fmt(totalGeral)}
+    </div>
+    <div style="font-size:12px;color:var(--muted)">
+      ${vendasCaixa.length} venda(s)
+    </div>
+  </div>
+
+  <div class="pay-summary-grid">
+    <div class="pay-summary-card">
+      <div class="ps-label">💵 Dinheiro</div>
+      <div class="ps-value" style="color:var(--green)">
+        ${fmt(byMethod.dinheiro)}
+      </div>
+    </div>
+
+    <div class="pay-summary-card">
+      <div class="ps-label">💳 Débito</div>
+      <div class="ps-value" style="color:var(--blue)">
+        ${fmt(byMethod.debito)}
+      </div>
+    </div>
+
+    <div class="pay-summary-card">
+      <div class="ps-label">💎 Crédito</div>
+      <div class="ps-value" style="color:var(--purple)">
+        ${fmt(byMethod.credito)}
+      </div>
+    </div>
+
+    <div class="pay-summary-card">
+      <div class="ps-label">⚡ Pix</div>
+      <div class="ps-value" style="color:var(--amber)">
+        ${fmt(byMethod.pix)}
+      </div>
+    </div>
+
+    <div class="pay-summary-card" style="grid-column:1/-1">
+      <div class="ps-label">🪙 Crédito Cliente</div>
+      <div class="ps-value" style="color:var(--muted)">
+        ${fmt(byMethod.fiado)}
+      </div>
+    </div>
+  </div>`;
+
+  document.getElementById('fechamentoResumo').innerHTML = html;
+
+  showModal('fecharCaixaModal');
+
+}
+
+function confirmarFecharEnviarPDF(){
+
+  if(!caixaAtual) return;
+
+  const idx =
+    caixas.findIndex(c => c.id === caixaAtual.id);
+
+  if(idx >= 0){
+
+    caixas[idx].fechamento = ts();
+
+  }
+
+  gerarRelatorioFechamentoPDF(
+    caixaAtual,
+    true
+  );
+
+  caixaAtual = null;
+
+  updateCaixaBtn();
+  updateCaixaWarnBanner();
+
+  closeModal('fecharCaixaModal');
+
+  updateCaixaStatusUI();
+
+  toast(
+    '✅ Caixa fechado! PDF gerado e WhatsApp aberto.'
+  );
+
+}
+
+function updateCaixaStatusUI(){
+
+  const cx = getCurrentCaixa();
+
+  const dot =
+    document.getElementById('caixaDot');
+
+  if(!dot) return;
+
+  if(cx){
+
+    dot.className = 'caixa-dot open';
+
+    document.getElementById('caixaStatusLabel')
+      .textContent = 'Caixa Aberto';
+
+    document.getElementById('caixaStatusSub')
+      .textContent =
+      'Aberto em ' +
+      dateStr(cx.abertura) +
+      ' por ' +
+      cx.funcionario;
+
+  } else {
+
+    dot.className = 'caixa-dot closed';
+
+    document.getElementById('caixaStatusLabel')
+      .textContent = 'Caixa Fechado';
+
+    document.getElementById('caixaStatusSub')
+      .textContent = 'Nenhum caixa aberto';
+
+  }
+
+  const tbody =
+    document.getElementById('caixaTbody');
+
+  if(!tbody) return;
+
+  const listaCaixas =
+    (caixas || []).slice().reverse();
+
+  tbody.innerHTML = listaCaixas.map(c => {
+
+    const vendasCaixa =
+      (vendas || []).filter(
+        v => v.caixaId === c.id
+      );
+
+    const total =
+      vendasCaixa.reduce(
+        (s,v) => s + Number(v.total || 0),
+        0
+      );
+
+    return `
+      <tr>
+        <td>${dateOnly(c.abertura)}</td>
+        <td>${fmt(c.valorInicial)}</td>
+        <td>${c.fechamento ? dateStr(c.fechamento) : '-'}</td>
+        <td>${vendasCaixa.length}</td>
+        <td style="font-weight:700;color:var(--amber)">
+          ${fmt(total)}
+        </td>
+        <td>
+          <span class="badge ${
+            c.fechamento
+              ? 'badge-muted'
+              : 'badge-green'
+          }">
+            ${c.fechamento ? 'Fechado' : 'Aberto'}
+          </span>
+        </td>
+        <td>
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick="exportCaixaPDF('${c.id}')">
+            📄 PDF
+          </button>
+        </td>
+      </tr>`;
+  }).join('')
+
+  || '<tr><td colspan="7" style="color:var(--muted);text-align:center">Nenhum caixa registrado</td></tr>';
+
 }
 
 // =====================================================
@@ -1008,31 +1272,123 @@ function onEmojiInput(val){
 
 let activeCat='Todos';
 function renderProducts(){
-  const produtos=DB.get('produtos')||[];
-  const cats=['Todos',...new Set(produtos.map(p=>p.categoria))];
-  document.getElementById('catChips').innerHTML=cats.map(c=>`<div class="cat-chip ${c===activeCat?'active':''}" onclick="setCat('${c}')">${c}</div>`).join('');
-  const search=(document.getElementById('searchProd')?.value||'').toLowerCase();
-  const filtered=produtos.filter(p=>(activeCat==='Todos'||p.categoria===activeCat)&&(!search||p.nome.toLowerCase().includes(search)));
-  document.getElementById('productsGrid').innerHTML=filtered.map(p=>{
-    const inCart=cart.find(c=>c.produto.id===p.id);
-    return `<div class="product-btn" id="pbtn-${p.id}" onclick="addToCart(${p.id})">
-      <div class="p-icon">${prodIconHTML(p,'grid')}</div>
-      <div class="p-name">${p.nome}</div>
-      <div class="p-price">${fmt(p.preco)}</div>
-      ${inCart?`<div class="p-qty-badge">${inCart.qty}</div>`:''}
-    </div>`;
-  }).join('');
+
+  const listaProdutos = produtos || [];
+
+  const cats = [
+    'Todos',
+    ...new Set(
+      listaProdutos.map(p => p.categoria)
+    )
+  ];
+
+  document.getElementById('catChips').innerHTML =
+    cats.map(c => `
+      <div
+        class="cat-chip ${c===activeCat?'active':''}"
+        onclick="setCat('${c}')">
+        ${c}
+      </div>
+    `).join('');
+
+  const search =
+    (document.getElementById('searchProd')?.value || '')
+    .toLowerCase();
+
+  const filtered = listaProdutos.filter(p =>
+    (activeCat === 'Todos' ||
+     p.categoria === activeCat)
+    &&
+    (!search ||
+     p.nome.toLowerCase().includes(search))
+  );
+
+  document.getElementById('productsGrid').innerHTML =
+    filtered.map(p => {
+
+      const inCart =
+        cart.find(c => c.produto.id === p.id);
+
+      return `
+      <div
+        class="product-btn"
+        id="pbtn-${p.id}"
+        onclick="addToCart('${p.id}')">
+
+        <div class="p-icon">
+          ${prodIconHTML(p,'grid')}
+        </div>
+
+        <div class="p-name">
+          ${p.nome}
+        </div>
+
+        <div class="p-price">
+          ${fmt(p.preco)}
+        </div>
+
+        ${inCart ?
+          `<div class="p-qty-badge">${inCart.qty}</div>`
+          : ''
+        }
+
+      </div>`;
+    }).join('');
+
 }
+
 function setCat(cat){activeCat=cat;renderProducts();}
+
 function addToCart(prodId){
-  const p=(DB.get('produtos')||[]).find(x=>x.id===prodId);
-  if(!p)return;
-  const idx=cart.findIndex(c=>c.produto.id===prodId);
-  if(idx>=0)cart[idx].qty++;else cart.push({produto:p,qty:1});
-  const btn=document.getElementById('pbtn-'+prodId);
-  if(btn){btn.classList.add('pulse');setTimeout(()=>btn.classList.remove('pulse'),260);}
-  renderCart();renderProducts();
+
+  const p =
+    (produtos || []).find(
+      x => String(x.id) === String(prodId)
+    );
+
+  if(!p) return;
+
+  const idx =
+    cart.findIndex(
+      c => String(c.produto.id) === String(prodId)
+    );
+
+  if(idx >= 0){
+
+    cart[idx].qty++;
+
+  }else{
+
+    cart.push({
+      produto:p,
+      qty:1
+    });
+
+  }
+
+  const btn =
+    document.getElementById(
+      'pbtn-' + prodId
+    );
+
+  if(btn){
+
+    btn.classList.add('pulse');
+
+    setTimeout(() => {
+
+      btn.classList.remove('pulse');
+
+    },260);
+
+  }
+
+  renderCart();
+
+  renderProducts();
+
 }
+
 function renderCart(){
   const items=document.getElementById('cartItems');
   if(cart.length===0){items.innerHTML='<div class="cart-empty">🛒<br>Carrinho vazio</div>';document.getElementById('cartTotal').textContent='R$ 0,00';return;}
@@ -1085,16 +1441,54 @@ function calcTroco(){
   document.getElementById('trocoVal').textContent=fmt(Math.max(0,rec-total));
 }
 function renderClienteList(){
-  const search=(document.getElementById('searchCliente').value||'').toLowerCase();
-  const clientes=(DB.get('clientes')||[]).filter(c=>c.nome.toLowerCase().includes(search)||c.telefone.includes(search));
-  const el=document.getElementById('clienteListModal');
-  el.innerHTML=clientes.map(c=>{
-    const saldo=c.limite-c.usado;
-    return `<div class="client-list-item ${selectedCliente?.id===c.id?'sel':''}" onclick="selectCliente(${c.id})">
-      <div><div style="font-weight:700;font-size:14px">${c.nome}</div><div style="font-size:12px;color:var(--muted)">${c.telefone}</div></div>
-      <div class="cli-credit ${saldo<getCartTotal()?'credit-over':'credit-ok'}">${fmt(saldo)}</div>
-    </div>`;
-  }).join('')||'<div style="color:var(--muted);font-size:13px;padding:10px">Nenhum cliente encontrado</div>';
+
+  const search =
+    (document.getElementById('searchCliente').value || '')
+    .toLowerCase();
+
+  const listaClientes =
+    (clientes || []).filter(c =>
+      c.nome.toLowerCase().includes(search) ||
+      (c.telefone || '').includes(search)
+    );
+
+  const el =
+    document.getElementById('clienteListModal');
+
+  el.innerHTML = listaClientes.map(c => {
+
+    const saldo =
+      Number(c.limite || 0) -
+      Number(c.usado || 0);
+
+    return `
+      <div
+        class="client-list-item ${selectedCliente?.id===c.id?'sel':''}"
+        onclick="selectCliente('${c.id}')">
+
+        <div>
+          <div style="font-weight:700;font-size:14px">
+            ${c.nome}
+          </div>
+
+          <div style="font-size:12px;color:var(--muted)">
+            ${c.telefone}
+          </div>
+        </div>
+
+        <div class="cli-credit ${
+          saldo < getCartTotal()
+          ? 'credit-over'
+          : 'credit-ok'
+        }">
+          ${fmt(saldo)}
+        </div>
+
+      </div>`;
+  }).join('')
+
+  || '<div style="color:var(--muted);font-size:13px;padding:10px">Nenhum cliente encontrado</div>';
+
 }
 
 function selectCliente(id){
@@ -1139,27 +1533,111 @@ function selectCliente(id){
 
 }
 
-function confirmarVenda(){
-  if(!selectedPayMethod){toast('Selecione a forma de pagamento');return;}
-  const total=getCartTotal();
-  let clienteId=null;
-  if(selectedPayMethod==='fiado'){
-    if(!selectedCliente){toast('Selecione um cliente');return;}
-    const saldo=selectedCliente.limite-selectedCliente.usado;
-    if(saldo<total){toast('❌ Saldo insuficiente');return;}
-    const clientes=DB.get('clientes')||[];
-    const idx=clientes.findIndex(c=>c.id===selectedCliente.id);
-    if(idx>=0){clientes[idx].usado+=total;DB.set('clientes',clientes);}
-    clienteId=selectedCliente.id;
+async function confirmarVenda(){
+
+  if(!selectedPayMethod){
+    toast('Selecione a forma de pagamento');
+    return;
   }
-  const venda={id:uuid(),data:ts(),funcionario:currentUser?.nome,caixaId:caixaAtual?.id||null,
-    itens:cart.map(c=>({nome:c.produto.nome,qty:c.qty,preco:c.produto.preco})),
-    total,pagamento:selectedPayMethod,cliente:selectedCliente?.nome||null,clienteId};
-  const vendas=DB.get('vendas')||[];vendas.push(venda);DB.set('vendas',vendas);
+
+  const total = getCartTotal();
+
+  let clienteId = null;
+
+  if(selectedPayMethod === 'fiado'){
+
+    if(!selectedCliente){
+      toast('Selecione um cliente');
+      return;
+    }
+
+    const saldo =
+      Number(selectedCliente.limite || 0) -
+      Number(selectedCliente.usado || 0);
+
+    if(saldo < total){
+      toast('❌ Saldo insuficiente');
+      return;
+    }
+
+    const idx =
+      clientes.findIndex(
+        c => String(c.id) === String(selectedCliente.id)
+      );
+
+    if(idx >= 0){
+
+      clientes[idx].usado =
+        Number(clientes[idx].usado || 0) + total;
+
+      selectedCliente = clientes[idx];
+
+    }
+
+    clienteId = selectedCliente.id;
+
+  }
+
+  const venda = {
+
+    id: uuid(),
+
+    data: ts(),
+
+    funcionario:
+      currentUser?.nome || '',
+
+    caixaId:
+      caixaAtual?.id || null,
+
+    itens: cart.map(c => ({
+      nome: c.produto.nome,
+      qty: c.qty,
+      preco: c.produto.preco
+    })),
+
+    total,
+
+    pagamento: selectedPayMethod,
+
+    cliente:
+      selectedCliente?.nome || null,
+
+    clienteId
+
+  };
+
+  vendas.push(venda);
+
+  try{
+
+    await api(
+      'registrarVenda',
+      venda
+    );
+
+  }catch(e){
+
+    console.error(e);
+
+  }
+
   closeModal('paymentModal');
+
   clearCart();
-  toast(`✅ Venda finalizada! ${labelPgto(selectedPayMethod)}`);
-  if(clienteId) checkCreditoAposVenda(clienteId);
+
+  toast(
+    `✅ Venda finalizada! ${labelPgto(selectedPayMethod)}`
+  );
+
+  if(clienteId){
+
+    checkCreditoAposVenda(
+      clienteId
+    );
+
+  }
+
 }
 
 // =====================================================
@@ -1177,35 +1655,122 @@ function switchAdminPanel(name){
 }
 
 function renderDashboard(){
-  const vendas=DB.get('vendas')||[];
-  const hoje=new Date();hoje.setHours(0,0,0,0);
-  const vendasHoje=vendas.filter(v=>new Date(v.data)>=hoje);
-  const totHoje=vendasHoje.reduce((s,v)=>s+v.total,0);
-  const byM={dinheiro:0,debito:0,credito:0,pix:0,fiado:0};
-  vendasHoje.forEach(v=>{if(byM[v.pagamento]!==undefined)byM[v.pagamento]+=v.total;});
-  document.getElementById('statsGrid').innerHTML=`
-    <div class="stat-card amber"><div class="sc-label">💰 Total Hoje</div><div class="sc-value">${fmt(totHoje)}</div></div>
-    <div class="stat-card green"><div class="sc-label">💵 Dinheiro Hoje</div><div class="sc-value">${fmt(byM.dinheiro)}</div></div>
-    <div class="stat-card blue"><div class="sc-label">💳 Débito Hoje</div><div class="sc-value">${fmt(byM.debito)}</div></div>
-    <div class="stat-card purple"><div class="sc-label">💎 Crédito Hoje</div><div class="sc-value">${fmt(byM.credito)}</div></div>
-    <div class="stat-card amber"><div class="sc-label">⚡ Pix Hoje</div><div class="sc-value">${fmt(byM.pix)}</div></div>
-    <div class="stat-card red"><div class="sc-label">🪙 Crédito Cliente</div><div class="sc-value">${fmt(byM.fiado)}</div></div>`;
-  document.getElementById('recentSalesTbody').innerHTML=vendasHoje.slice().reverse().slice(0,12).map(v=>`
-    <tr><td>${timeOnly(v.data)}</td><td>${v.funcionario||'-'}</td><td style="font-weight:700;color:var(--amber)">${fmt(v.total)}</td><td>${labelPgto(v.pagamento)}</td></tr>
-  `).join('')||'<tr><td colspan="4" style="color:var(--muted);text-align:center">Nenhuma venda hoje</td></tr>';
+
+  const listaVendas = vendas || [];
+
+  const hoje = new Date();
+
+  hoje.setHours(0,0,0,0);
+
+  const vendasHoje = listaVendas.filter(v => {
+
+    const dataVenda = new Date(v.data);
+
+    return dataVenda >= hoje;
+
+  });
+
+  const totHoje = vendasHoje.reduce(
+    (s,v) => s + Number(v.total || 0),
+    0
+  );
+
+  const byM = {
+    dinheiro:0,
+    debito:0,
+    credito:0,
+    pix:0,
+    fiado:0
+  };
+
+  vendasHoje.forEach(v => {
+
+    if(byM[v.pagamento] !== undefined){
+
+      byM[v.pagamento] += Number(v.total || 0);
+
+    }
+
+  });
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-card amber">
+      <div class="sc-label">💰 Total Hoje</div>
+      <div class="sc-value">${fmt(totHoje)}</div>
+    </div>
+
+    <div class="stat-card green">
+      <div class="sc-label">💵 Dinheiro Hoje</div>
+      <div class="sc-value">${fmt(byM.dinheiro)}</div>
+    </div>
+
+    <div class="stat-card blue">
+      <div class="sc-label">💳 Débito Hoje</div>
+      <div class="sc-value">${fmt(byM.debito)}</div>
+    </div>
+
+    <div class="stat-card purple">
+      <div class="sc-label">💎 Crédito Hoje</div>
+      <div class="sc-value">${fmt(byM.credito)}</div>
+    </div>
+
+    <div class="stat-card amber">
+      <div class="sc-label">⚡ Pix Hoje</div>
+      <div class="sc-value">${fmt(byM.pix)}</div>
+    </div>
+
+    <div class="stat-card red">
+      <div class="sc-label">🪙 Crédito Cliente</div>
+      <div class="sc-value">${fmt(byM.fiado)}</div>
+    </div>
+  `;
+
+  document.getElementById('recentSalesTbody').innerHTML =
+    vendasHoje
+      .slice()
+      .reverse()
+      .slice(0,12)
+      .map(v => `
+        <tr>
+          <td>${timeOnly(v.data)}</td>
+          <td>${v.funcionario || '-'}</td>
+          <td style="font-weight:700;color:var(--amber)">
+            ${fmt(v.total)}
+          </td>
+          <td>${labelPgto(v.pagamento)}</td>
+        </tr>
+      `)
+      .join('')
+
+    || '<tr><td colspan="4" style="color:var(--muted);text-align:center">Nenhuma venda hoje</td></tr>';
+
 }
 
 function renderProdutosTable(){
-  document.getElementById('produtosTbody').innerHTML=(DB.get('produtos')||[]).map(p=>`
+
+  document.getElementById('produtosTbody').innerHTML =
+  (produtos || []).map(p => `
     <tr>
       <td>${prodIconHTML(p,'thumb')}</td>
       <td style="font-weight:600">${p.nome}</td>
       <td><span class="badge badge-muted">${p.categoria}</span></td>
-      <td style="font-weight:700;color:var(--amber)">${fmt(p.preco)}</td>
-      <td class="actions"><button class="btn btn-ghost btn-sm" onclick="editProduto(${p.id})">✏️</button><button class="btn btn-red btn-sm" onclick="deleteProduto(${p.id})">🗑️</button></td>
+      <td style="font-weight:700;color:var(--amber)">
+        ${fmt(p.preco)}
+      </td>
+      <td class="actions">
+        <button class="btn btn-ghost btn-sm"
+          onclick="editProduto('${p.id}')">✏️</button>
+
+        <button class="btn btn-red btn-sm"
+          onclick="deleteProduto('${p.id}')">🗑️</button>
+      </td>
     </tr>
-  `).join('')||'<tr><td colspan="5" style="color:var(--muted);text-align:center">Nenhum produto</td></tr>';
+  `).join('')
+
+  || '<tr><td colspan="5" style="color:var(--muted);text-align:center">Nenhum produto</td></tr>';
+
 }
+
 function openProdModal(){
   document.getElementById('prodModalTitle').textContent='Novo Produto';
   document.getElementById('prodId').value='';
@@ -1221,28 +1786,71 @@ function openProdModal(){
   showModal('prodModal');
 }
 function editProduto(id){
-  const p=(DB.get('produtos')||[]).find(x=>x.id===id);
+
+  const p =
+    (produtos || []).find(
+      x => String(x.id) === String(id)
+    );
+
   if(!p) return;
-  document.getElementById('prodModalTitle').textContent='Editar Produto';
-  document.getElementById('prodId').value=p.id;
-  document.getElementById('prodFotoNome').value=p.foto||'';
-  document.getElementById('prodFotoFile').value='';
-  document.getElementById('prodEmoji').value=p.foto ? '' : (p.emoji||'');
-  document.getElementById('prodNome').value=p.nome;
-  document.getElementById('prodCat').value=p.categoria;
-  document.getElementById('prodPreco').value=p.preco;
-  const preview=document.getElementById('fotoPreview');
+
+  document.getElementById('prodModalTitle').textContent =
+    'Editar Produto';
+
+  document.getElementById('prodId').value =
+    p.id;
+
+  document.getElementById('prodFotoNome').value =
+    p.foto || '';
+
+  document.getElementById('prodFotoFile').value =
+    '';
+
+  document.getElementById('prodEmoji').value =
+    p.foto ? '' : (p.emoji || '');
+
+  document.getElementById('prodNome').value =
+    p.nome;
+
+  document.getElementById('prodCat').value =
+    p.categoria;
+
+  document.getElementById('prodPreco').value =
+    p.preco;
+
+  const preview =
+    document.getElementById('fotoPreview');
+
   if(p.foto){
-    preview.innerHTML=`<img src="${p.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;
-    document.getElementById('fotoNomeLabel').textContent='✅ Foto carregada';
+
+    preview.innerHTML =
+      `<img src="${p.foto}"
+        style="width:100%;height:100%;
+        object-fit:cover;border-radius:10px">`;
+
+    document.getElementById('fotoNomeLabel')
+      .textContent = '✅ Foto carregada';
+
     toggleEmojiField(true);
-  } else {
-    preview.innerHTML=`<span id="fotoPreviewEmoji">${p.emoji||'🍽️'}</span>`;
-    document.getElementById('fotoNomeLabel').textContent='Nenhuma foto selecionada';
+
+  }else{
+
+    preview.innerHTML =
+      `<span id="fotoPreviewEmoji">
+        ${p.emoji || '🍽️'}
+      </span>`;
+
+    document.getElementById('fotoNomeLabel')
+      .textContent = 'Nenhuma foto selecionada';
+
     toggleEmojiField(false);
+
   }
+
   showModal('prodModal');
+
 }
+
 async function salvarProduto(){
 
   const id = document.getElementById('prodId').value;
@@ -1501,24 +2109,93 @@ async function deleteFunc(id){
 }
 
 function renderClientesTable(){
-  const clientes=DB.get('clientes')||[];
-  document.getElementById('clientesTbody').innerHTML=clientes.map(c=>{
-    const saldo=c.limite-c.usado;
-    const pct=c.limite>0?c.usado/c.limite:0;
-    const cls=pct>=1?'credit-over':pct>=.7?'credit-warn':'credit-ok';
-    const baixo=saldo<=(c.alerta||25)&&saldo>=0;
-    return `<tr>
-      <td style="font-weight:600">${c.nome}</td><td>${c.telefone}</td><td>${c.email||'-'}</td>
-      <td>${fmt(c.limite)}</td><td class="${cls}">${fmt(c.usado)}</td>
-      <td class="${cls}" style="font-weight:700">${fmt(saldo)}</td>
-      <td>${baixo?`<span class="credit-low-badge">⚠️ Baixo</span>`:'-'}</td>
-      <td class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="editCliente(${c.id})" title="Editar">✏️</button>
-        <button class="btn btn-blue btn-sm" onclick="openNotifyModal(${c.id})" title="Notificar">🔔</button>
-        <button class="btn btn-ghost btn-sm" onclick="resetCredito(${c.id})" title="Zerar uso">↩️</button>
-        <button class="btn btn-red btn-sm" onclick="deleteCliente(${c.id})" title="Remover">🗑️</button>
-      </td></tr>`;
-  }).join('')||'<tr><td colspan="8" style="color:var(--muted);text-align:center">Nenhum cliente</td></tr>';
+
+  const listaClientes = clientes || [];
+
+  document.getElementById('clientesTbody').innerHTML =
+    listaClientes.map(c => {
+
+      const saldo =
+        Number(c.limite || 0) -
+        Number(c.usado || 0);
+
+      const pct =
+        Number(c.limite || 0) > 0
+        ? Number(c.usado || 0) / Number(c.limite || 0)
+        : 0;
+
+      const cls =
+        pct >= 1
+        ? 'credit-over'
+        : pct >= 0.7
+        ? 'credit-warn'
+        : 'credit-ok';
+
+      const baixo =
+        saldo <= Number(c.alerta || 25)
+        && saldo >= 0;
+
+      return `
+      <tr>
+        <td style="font-weight:600">${c.nome}</td>
+        <td>${c.telefone || ''}</td>
+        <td>${c.email || '-'}</td>
+
+        <td>${fmt(c.limite || 0)}</td>
+
+        <td class="${cls}">
+          ${fmt(c.usado || 0)}
+        </td>
+
+        <td class="${cls}" style="font-weight:700">
+          ${fmt(saldo)}
+        </td>
+
+        <td>
+          ${
+            baixo
+            ? '<span class="credit-low-badge">⚠️ Baixo</span>'
+            : '-'
+          }
+        </td>
+
+        <td class="actions">
+
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick="editCliente('${c.id}')"
+            title="Editar">
+            ✏️
+          </button>
+
+          <button
+            class="btn btn-blue btn-sm"
+            onclick="openNotifyModal('${c.id}')"
+            title="Notificar">
+            🔔
+          </button>
+
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick="resetCredito('${c.id}')"
+            title="Zerar uso">
+            ↩️
+          </button>
+
+          <button
+            class="btn btn-red btn-sm"
+            onclick="deleteCliente('${c.id}')"
+            title="Remover">
+            🗑️
+          </button>
+
+        </td>
+
+      </tr>`;
+    }).join('')
+
+    || '<tr><td colspan="8" style="color:var(--muted);text-align:center">Nenhum cliente</td></tr>';
+
 }
 
 function editCliente(id){
@@ -1653,169 +2330,687 @@ async function deleteCliente(id){
 
 }
 
-function resetCredito(id){if(!confirm('Zerar crédito usado?'))return;const cl=DB.get('clientes')||[];const idx=cl.findIndex(c=>c.id===id);if(idx>=0){cl[idx].usado=0;DB.set('clientes',cl);}renderClientesTable();toast('Crédito zerado');}
+function resetCredito(id){
+
+  if(!confirm('Zerar crédito usado?'))
+    return;
+
+  const idx =
+    clientes.findIndex(
+      c => String(c.id) === String(id)
+    );
+
+  if(idx >= 0){
+
+    clientes[idx].usado = 0;
+
+    if(
+      selectedCliente &&
+      String(selectedCliente.id) === String(id)
+    ){
+      selectedCliente = clientes[idx];
+    }
+
+  }
+
+  renderClientesTable();
+
+  renderClienteList();
+
+  toast('✅ Crédito zerado');
+
+}
+
 function openNotifyModal(id){
-  const c=(DB.get('clientes')||[]).find(x=>x.id===id);if(!c)return;
-  notifyTarget=c;
-  const saldo=c.limite-c.usado;
-  document.getElementById('notifyClienteInfo').innerHTML=`
+
+  const c =
+    (clientes || []).find(
+      x => String(x.id) === String(id)
+    );
+
+  if(!c) return;
+
+  notifyTarget = c;
+
+  const saldo =
+    Number(c.limite || 0) -
+    Number(c.usado || 0);
+
+  document.getElementById('notifyClienteInfo').innerHTML = `
     <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:4px">
-      <div style="font-weight:700;font-size:15px">${c.nome}</div>
-      <div style="font-size:13px;color:var(--muted)">Saldo: <b style="color:${saldo<=(c.alerta||25)?'var(--red)':'var(--green)'}">${fmt(saldo)}</b> | Limite: ${fmt(c.limite)}</div>
-    </div>`;
+
+      <div style="font-weight:700;font-size:15px">
+        ${c.nome}
+      </div>
+
+      <div style="font-size:13px;color:var(--muted)">
+
+        Saldo:
+
+        <b style="color:${
+          saldo <= Number(c.alerta || 25)
+          ? 'var(--red)'
+          : 'var(--green)'
+        }">
+
+          ${fmt(saldo)}
+
+        </b>
+
+        |
+
+        Limite: ${fmt(c.limite || 0)}
+
+      </div>
+
+    </div>
+  `;
+
   showModal('notifyModal');
+
 }
 
 function renderVendasTable(){
-  document.getElementById('vendasTbody').innerHTML=(DB.get('vendas')||[]).slice().reverse().map(v=>`
-    <tr><td>${dateStr(v.data)}</td><td>${v.funcionario||'-'}</td><td>${v.cliente||'-'}</td>
-    <td style="font-size:12px">${v.itens.map(i=>i.qty+'x '+i.nome).join(', ')}</td>
-    <td style="font-weight:700;color:var(--amber)">${fmt(v.total)}</td><td>${labelPgto(v.pagamento)}</td></tr>
-  `).join('')||'<tr><td colspan="6" style="color:var(--muted);text-align:center">Nenhuma venda</td></tr>';
+
+  document.getElementById('vendasTbody').innerHTML =
+
+    (vendas || [])
+      .slice()
+      .reverse()
+      .map(v => `
+
+        <tr>
+
+          <td>${dateStr(v.data)}</td>
+
+          <td>${v.funcionario || '-'}</td>
+
+          <td>${v.cliente || '-'}</td>
+
+          <td style="font-size:12px">
+            ${(v.itens || [])
+              .map(i => i.qty + 'x ' + i.nome)
+              .join(', ')}
+          </td>
+
+          <td style="font-weight:700;color:var(--amber)">
+            ${fmt(v.total || 0)}
+          </td>
+
+          <td>
+            ${labelPgto(v.pagamento)}
+          </td>
+
+        </tr>
+
+      `)
+      .join('')
+
+    || '<tr><td colspan="6" style="color:var(--muted);text-align:center">Nenhuma venda</td></tr>';
+
 }
 
 // =====================================================
 // PDF
 // =====================================================
 function buildPDFRelatorio(doc,caixa){
-  const vendas=(DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id);
-  const totalGeral=vendas.reduce((s,v)=>s+v.total,0);
-  const byM={dinheiro:0,debito:0,credito:0,pix:0,fiado:0};
-  vendas.forEach(v=>{if(byM[v.pagamento]!==undefined)byM[v.pagamento]+=v.total;});
+
+  const vendasCaixa = (vendas || []).filter(
+    v => String(v.caixaId) === String(caixa.id)
+  );
+
+  const totalGeral = vendasCaixa.reduce(
+    (s,v) => s + Number(v.total || 0),
+    0
+  );
+
+  const byM = {
+    dinheiro:0,
+    debito:0,
+    credito:0,
+    pix:0,
+    fiado:0
+  };
+
+  vendasCaixa.forEach(v => {
+
+    if(byM[v.pagamento] !== undefined){
+
+      byM[v.pagamento] += Number(v.total || 0);
+
+    }
+
+  });
 
   // Header
-  doc.setFillColor(245,158,11);doc.rect(0,0,210,28,'F');
-  doc.setTextColor(15,23,42);doc.setFontSize(18);doc.setFont('helvetica','bold');
-  doc.text('CantinaApp — Relatório de Caixa',14,17);
-  doc.setFontSize(9);doc.setTextColor(80,60,0);
-  doc.text('Gerado em: '+dateStr(Date.now()),14,24);
+  doc.setFillColor(245,158,11);
+  doc.rect(0,0,210,28,'F');
 
-  // Info caixa
-  doc.setTextColor(30,41,59);doc.setFontSize(10);doc.setFont('helvetica','normal');
-  doc.text(`Abertura: ${dateStr(caixa.abertura)}`,14,36);
-  doc.text(`Fechamento: ${caixa.fechamento?dateStr(caixa.fechamento):dateStr(Date.now())}`,14,42);
-  doc.text(`Responsável: ${caixa.funcionario}`,14,48);
-  doc.text(`Valor Inicial: ${fmt(caixa.valorInicial)}`,14,54);
+  doc.setTextColor(15,23,42);
+  doc.setFontSize(18);
+  doc.setFont('helvetica','bold');
 
-  // Totais por forma de pagamento
-  doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(15,23,42);
-  doc.text('Resumo por Forma de Pagamento',14,64);
+  doc.text(
+    'CantinaApp — Relatório de Caixa',
+    14,
+    17
+  );
+
+  doc.setFontSize(9);
+  doc.setTextColor(80,60,0);
+
+  doc.text(
+    'Gerado em: ' + dateStr(Date.now()),
+    14,
+    24
+  );
+
+  // Dados do caixa
+  doc.setTextColor(30,41,59);
+  doc.setFontSize(10);
+  doc.setFont('helvetica','normal');
+
+  doc.text(
+    `Abertura: ${dateStr(caixa.abertura)}`,
+    14,
+    36
+  );
+
+  doc.text(
+    `Fechamento: ${
+      caixa.fechamento
+      ? dateStr(caixa.fechamento)
+      : dateStr(Date.now())
+    }`,
+    14,
+    42
+  );
+
+  doc.text(
+    `Responsável: ${caixa.funcionario}`,
+    14,
+    48
+  );
+
+  doc.text(
+    `Valor Inicial: ${fmt(caixa.valorInicial)}`,
+    14,
+    54
+  );
+
+  // Resumo
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(11);
+  doc.setTextColor(15,23,42);
+
+  doc.text(
+    'Resumo por Forma de Pagamento',
+    14,
+    64
+  );
+
   doc.autoTable({
     startY:68,
-    head:[['Forma de Pagamento','Total','%']],
-    body:[
-      ['💵 Dinheiro',     fmt(byM.dinheiro), totalGeral>0?((byM.dinheiro/totalGeral)*100).toFixed(1)+'%':'0%'],
-      ['💳 Débito',       fmt(byM.debito),   totalGeral>0?((byM.debito/totalGeral)*100).toFixed(1)+'%':'0%'],
-      ['💎 Crédito',      fmt(byM.credito),  totalGeral>0?((byM.credito/totalGeral)*100).toFixed(1)+'%':'0%'],
-      ['⚡ Pix',          fmt(byM.pix),      totalGeral>0?((byM.pix/totalGeral)*100).toFixed(1)+'%':'0%'],
-      ['🪙 Crédito Cliente',fmt(byM.fiado),  totalGeral>0?((byM.fiado/totalGeral)*100).toFixed(1)+'%':'0%'],
+
+    head:[
+      ['Forma de Pagamento','Total','%']
     ],
-    foot:[['TOTAL GERAL',fmt(totalGeral),'100%']],
+
+    body:[
+
+      [
+        '💵 Dinheiro',
+        fmt(byM.dinheiro),
+        totalGeral > 0
+          ? ((byM.dinheiro/totalGeral)*100).toFixed(1)+'%'
+          : '0%'
+      ],
+
+      [
+        '💳 Débito',
+        fmt(byM.debito),
+        totalGeral > 0
+          ? ((byM.debito/totalGeral)*100).toFixed(1)+'%'
+          : '0%'
+      ],
+
+      [
+        '💎 Crédito',
+        fmt(byM.credito),
+        totalGeral > 0
+          ? ((byM.credito/totalGeral)*100).toFixed(1)+'%'
+          : '0%'
+      ],
+
+      [
+        '⚡ Pix',
+        fmt(byM.pix),
+        totalGeral > 0
+          ? ((byM.pix/totalGeral)*100).toFixed(1)+'%'
+          : '0%'
+      ],
+
+      [
+        '🪙 Crédito Cliente',
+        fmt(byM.fiado),
+        totalGeral > 0
+          ? ((byM.fiado/totalGeral)*100).toFixed(1)+'%'
+          : '0%'
+      ]
+
+    ],
+
+    foot:[
+      [
+        'TOTAL GERAL',
+        fmt(totalGeral),
+        '100%'
+      ]
+    ],
+
     theme:'grid',
-    headStyles:{fillColor:[30,41,59],textColor:[241,245,249],fontStyle:'bold'},
-    footStyles:{fillColor:[245,158,11],textColor:[15,23,42],fontStyle:'bold'},
-    styles:{fontSize:10},
+
+    headStyles:{
+      fillColor:[30,41,59],
+      textColor:[241,245,249],
+      fontStyle:'bold'
+    },
+
+    footStyles:{
+      fillColor:[245,158,11],
+      textColor:[15,23,42],
+      fontStyle:'bold'
+    },
+
+    styles:{
+      fontSize:10
+    }
+
   });
 
-  // Detalhe das vendas
-  doc.setFont('helvetica','bold');doc.setFontSize(11);doc.setTextColor(15,23,42);
-  doc.text('Detalhe das Vendas ('+vendas.length+')',14,doc.lastAutoTable.finalY+12);
+  // Vendas
+  doc.setFont('helvetica','bold');
+  doc.setFontSize(11);
+  doc.setTextColor(15,23,42);
+
+  doc.text(
+    'Detalhe das Vendas (' +
+    vendasCaixa.length +
+    ')',
+    14,
+    doc.lastAutoTable.finalY + 12
+  );
+
   doc.autoTable({
-    startY:doc.lastAutoTable.finalY+16,
-    head:[['Hora','Funcionário','Cliente','Itens','Total','Pagamento']],
-    body:vendas.map(v=>[
+
+    startY:
+      doc.lastAutoTable.finalY + 16,
+
+    head:[
+      [
+        'Hora',
+        'Funcionário',
+        'Cliente',
+        'Itens',
+        'Total',
+        'Pagamento'
+      ]
+    ],
+
+    body:vendasCaixa.map(v => [
+
       timeOnly(v.data),
-      v.funcionario||'-',
-      v.cliente||'-',
-      v.itens.map(i=>i.qty+'x '+i.nome).join(', '),
-      fmt(v.total),
+
+      v.funcionario || '-',
+
+      v.cliente || '-',
+
+      (v.itens || [])
+        .map(i => i.qty + 'x ' + i.nome)
+        .join(', '),
+
+      fmt(v.total || 0),
+
       labelPgto(v.pagamento)
+
     ]),
+
     theme:'striped',
-    headStyles:{fillColor:[30,41,59],textColor:[241,245,249]},
-    alternateRowStyles:{fillColor:[248,250,252]},
-    styles:{fontSize:8},
+
+    headStyles:{
+      fillColor:[30,41,59],
+      textColor:[241,245,249]
+    },
+
+    alternateRowStyles:{
+      fillColor:[248,250,252]
+    },
+
+    styles:{
+      fontSize:8
+    }
+
   });
 
-  return {doc, totalGeral, byM, vendas};
+  return {
+    doc,
+    totalGeral,
+    byM,
+    vendas:vendasCaixa
+  };
+
 }
 
 function gerarRelatorioFechamentoPDF(caixa, enviarWhatsApp=false){
-  const {jsPDF}=jspdf;
-  const doc=new jsPDF();
-  const {totalGeral}=buildPDFRelatorio(doc,caixa);
-  const filename=`caixa_${dateOnly(caixa.abertura).replace(/\//g,'-')}.pdf`;
 
-  // Salva e converte para blob para enviar via WA
+  const { jsPDF } = jspdf;
+
+  const doc = new jsPDF();
+
+  const { totalGeral } =
+    buildPDFRelatorio(doc, caixa);
+
+  const filename =
+    `caixa_${dateOnly(caixa.abertura).replace(/\//g,'-')}.pdf`;
+
   if(enviarWhatsApp){
-    const pdfBlob=doc.output('blob');
-    const pdfUrl=URL.createObjectURL(pdfBlob);
+
+    const vendasCaixa =
+      (vendas || []).filter(
+        v => String(v.caixaId) === String(caixa.id)
+      );
+
+    const totalDinheiro =
+      vendasCaixa
+        .filter(v => v.pagamento === 'dinheiro')
+        .reduce((s,v) => s + Number(v.total || 0), 0);
+
+    const totalDebito =
+      vendasCaixa
+        .filter(v => v.pagamento === 'debito')
+        .reduce((s,v) => s + Number(v.total || 0), 0);
+
+    const totalCredito =
+      vendasCaixa
+        .filter(v => v.pagamento === 'credito')
+        .reduce((s,v) => s + Number(v.total || 0), 0);
+
+    const totalPix =
+      vendasCaixa
+        .filter(v => v.pagamento === 'pix')
+        .reduce((s,v) => s + Number(v.total || 0), 0);
+
+    const totalFiado =
+      vendasCaixa
+        .filter(v => v.pagamento === 'fiado')
+        .reduce((s,v) => s + Number(v.total || 0), 0);
+
+    const pdfBlob =
+      doc.output('blob');
+
+    URL.createObjectURL(pdfBlob);
+
     doc.save(filename);
-    // WA não aceita anexo direto de navegador; abre msg com resumo e instrui
-    const msg=`🍽️ *CantinaApp — Fechamento de Caixa*\n`+
-      `📅 Data: ${dateOnly(caixa.abertura)}\n`+
-      `🕐 Abertura: ${dateStr(caixa.abertura)}\n`+
-      `🕐 Fechamento: ${dateStr(Date.now())}\n`+
-      `👤 Responsável: ${caixa.funcionario}\n\n`+
-      `💰 *TOTAL GERAL: ${fmt(totalGeral)}*\n\n`+
-      `💵 Dinheiro: ${fmt((DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id&&v.pagamento==='dinheiro').reduce((s,v)=>s+v.total,0))}\n`+
-      `💳 Débito: ${fmt((DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id&&v.pagamento==='debito').reduce((s,v)=>s+v.total,0))}\n`+
-      `💎 Crédito: ${fmt((DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id&&v.pagamento==='credito').reduce((s,v)=>s+v.total,0))}\n`+
-      `⚡ Pix: ${fmt((DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id&&v.pagamento==='pix').reduce((s,v)=>s+v.total,0))}\n`+
-      `🪙 Crédito Cliente: ${fmt((DB.get('vendas')||[]).filter(v=>v.caixaId===caixa.id&&v.pagamento==='fiado').reduce((s,v)=>s+v.total,0))}\n\n`+
-      `📎 PDF do relatório foi baixado automaticamente. Anexe ao enviar esta mensagem.`;
-    setTimeout(()=>{window.open(`https://wa.me/5521971724498?text=${encodeURIComponent(msg)}`,'_blank');},900);
+
+    const msg =
+      `🍽️ *CantinaApp — Fechamento de Caixa*\n` +
+      `📅 Data: ${dateOnly(caixa.abertura)}\n` +
+      `🕐 Abertura: ${dateStr(caixa.abertura)}\n` +
+      `🕐 Fechamento: ${dateStr(Date.now())}\n` +
+      `👤 Responsável: ${caixa.funcionario}\n\n` +
+      `💰 *TOTAL GERAL: ${fmt(totalGeral)}*\n\n` +
+      `💵 Dinheiro: ${fmt(totalDinheiro)}\n` +
+      `💳 Débito: ${fmt(totalDebito)}\n` +
+      `💎 Crédito: ${fmt(totalCredito)}\n` +
+      `⚡ Pix: ${fmt(totalPix)}\n` +
+      `🪙 Crédito Cliente: ${fmt(totalFiado)}\n\n` +
+      `📎 PDF do relatório foi baixado automaticamente.`;
+
+    setTimeout(() => {
+
+      window.open(
+        `https://wa.me/5521971724498?text=${encodeURIComponent(msg)}`,
+        '_blank'
+      );
+
+    }, 900);
+
   } else {
+
     doc.save(filename);
+
   }
+
 }
 
 function exportCaixaPDF(caixaId){
-  const cx=(DB.get('caixas')||[]).find(c=>c.id==caixaId);
-  if(!cx){toast('Caixa não encontrado');return;}
-  gerarRelatorioFechamentoPDF(cx,false);
+
+  const cx =
+    (caixas || []).find(
+      c => String(c.id) === String(caixaId)
+    );
+
+  if(!cx){
+
+    toast('Caixa não encontrado');
+
+    return;
+
+  }
+
+  gerarRelatorioFechamentoPDF(
+    cx,
+    false
+  );
+
   toast('📄 PDF gerado!');
+
 }
 
 function exportVendasPDF(){
-  const {jsPDF}=jspdf;
-  const doc=new jsPDF('landscape');
-  const vendas=DB.get('vendas')||[];
-  doc.setFillColor(245,158,11);doc.rect(0,0,300,20,'F');
-  doc.setTextColor(15,23,42);doc.setFontSize(14);doc.setFont('helvetica','bold');
-  doc.text('CantinaApp — Histórico de Vendas',14,13);
-  doc.setTextColor(80);doc.setFontSize(9);doc.setFont('helvetica','normal');
-  doc.text('Gerado: '+dateStr(Date.now()),230,13);
-  const byM={dinheiro:0,debito:0,credito:0,pix:0,fiado:0};
-  vendas.forEach(v=>{if(byM[v.pagamento]!==undefined)byM[v.pagamento]+=v.total;});
-  const total=vendas.reduce((s,v)=>s+v.total,0);
-  doc.autoTable({
-    startY:24,
-    head:[['Forma','Total']],
-    body:Object.entries(byM).map(([k,v])=>[labelPgto(k),fmt(v)]),
-    foot:[['TOTAL',fmt(total)]],
-    theme:'grid',headStyles:{fillColor:[30,41,59]},footStyles:{fillColor:[245,158,11],textColor:[15,23,42]},
-    styles:{fontSize:9},margin:{right:150}
+
+  const { jsPDF } = jspdf;
+
+  const doc = new jsPDF('landscape');
+
+  const listaVendas = vendas || [];
+
+  doc.setFillColor(245,158,11);
+  doc.rect(0,0,300,20,'F');
+
+  doc.setTextColor(15,23,42);
+  doc.setFontSize(14);
+  doc.setFont('helvetica','bold');
+
+  doc.text(
+    'CantinaApp — Histórico de Vendas',
+    14,
+    13
+  );
+
+  doc.setTextColor(80);
+  doc.setFontSize(9);
+  doc.setFont('helvetica','normal');
+
+  doc.text(
+    'Gerado: ' + dateStr(Date.now()),
+    230,
+    13
+  );
+
+  const byM = {
+    dinheiro:0,
+    debito:0,
+    credito:0,
+    pix:0,
+    fiado:0
+  };
+
+  listaVendas.forEach(v => {
+
+    if(byM[v.pagamento] !== undefined){
+
+      byM[v.pagamento] +=
+        Number(v.total || 0);
+
+    }
+
   });
+
+  const total = listaVendas.reduce(
+    (s,v) => s + Number(v.total || 0),
+    0
+  );
+
   doc.autoTable({
+
     startY:24,
-    head:[['Data/Hora','Func.','Cliente','Itens','Total','Pagamento']],
-    body:vendas.slice().reverse().map(v=>[dateStr(v.data),v.funcionario||'-',v.cliente||'-',v.itens.map(i=>i.qty+'x '+i.nome).join(', '),fmt(v.total),labelPgto(v.pagamento)]),
-    theme:'striped',headStyles:{fillColor:[30,41,59]},
-    styles:{fontSize:8},
+
+    head:[
+      ['Forma','Total']
+    ],
+
+    body:Object.entries(byM).map(
+      ([k,v]) => [
+        labelPgto(k),
+        fmt(v)
+      ]
+    ),
+
+    foot:[
+      ['TOTAL',fmt(total)]
+    ],
+
+    theme:'grid',
+
+    headStyles:{
+      fillColor:[30,41,59]
+    },
+
+    footStyles:{
+      fillColor:[245,158,11],
+      textColor:[15,23,42]
+    },
+
+    styles:{
+      fontSize:9
+    },
+
+    margin:{
+      right:150
+    }
+
+  });
+
+  doc.autoTable({
+
+    startY:24,
+
+    head:[[
+      'Data/Hora',
+      'Funcionário',
+      'Cliente',
+      'Itens',
+      'Total',
+      'Pagamento'
+    ]],
+
+    body:listaVendas
+      .slice()
+      .reverse()
+      .map(v => [
+
+        dateStr(v.data),
+
+        v.funcionario || '-',
+
+        v.cliente || '-',
+
+        (v.itens || [])
+          .map(i => i.qty + 'x ' + i.nome)
+          .join(', '),
+
+        fmt(v.total || 0),
+
+        labelPgto(v.pagamento)
+
+      ]),
+
+    theme:'striped',
+
+    headStyles:{
+      fillColor:[30,41,59]
+    },
+
+    styles:{
+      fontSize:8
+    },
+
     tableWidth:280
+
   });
-  doc.save('vendas_cantina.pdf');
+
+  doc.save(
+    'vendas_cantina.pdf'
+  );
+
 }
+
 function exportVendasXLSX(){
-  const vendas=DB.get('vendas')||[];
-  const rows=[['Data/Hora','Funcionário','Cliente','Itens','Total','Pagamento']];
-  vendas.slice().reverse().forEach(v=>{
-    rows.push([dateStr(v.data),v.funcionario||'-',v.cliente||'-',v.itens.map(i=>i.qty+'x '+i.nome).join(', '),v.total,labelPgto(v.pagamento)]);
-  });
-  const ws=XLSX.utils.aoa_to_sheet(rows);
-  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Vendas');
-  XLSX.writeFile(wb,'vendas_cantina.xlsx');
+
+  const listaVendas = vendas || [];
+
+  const rows = [[
+    'Data/Hora',
+    'Funcionário',
+    'Cliente',
+    'Itens',
+    'Total',
+    'Pagamento'
+  ]];
+
+  listaVendas
+    .slice()
+    .reverse()
+    .forEach(v => {
+
+      rows.push([
+
+        dateStr(v.data),
+
+        v.funcionario || '-',
+
+        v.cliente || '-',
+
+        (v.itens || [])
+          .map(i => i.qty + 'x ' + i.nome)
+          .join(', '),
+
+        Number(v.total || 0),
+
+        labelPgto(v.pagamento)
+
+      ]);
+
+    });
+
+  const ws =
+    XLSX.utils.aoa_to_sheet(rows);
+
+  const wb =
+    XLSX.utils.book_new();
+
+  XLSX.utils.book_append_sheet(
+    wb,
+    ws,
+    'Vendas'
+  );
+
+  XLSX.writeFile(
+    wb,
+    'vendas_cantina.xlsx'
+  );
+
 }
 
 // =====================================================
