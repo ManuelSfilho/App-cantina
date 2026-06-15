@@ -538,10 +538,25 @@ async function carregarProdutos(){
 
 }
 
+function getCurrentCaixa(){
+
+  const caixas = Array.isArray(window.caixas)
+    ? window.caixas
+    : [];
+
+  return caixas.find(c => !c.fechamento) || null;
+
+}
+
 async function carregarCaixas(){
 
-  caixas =
-    await api('listarCaixas');
+  const dados = await api('listarCaixas');
+
+  window.caixas = Array.isArray(dados)
+    ? dados
+    : [];
+
+  caixaAtual = getCurrentCaixa();
 
   updateCaixaStatusUI();
 
