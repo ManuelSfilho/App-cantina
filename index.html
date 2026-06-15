@@ -485,10 +485,58 @@ label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bot
 // =====================================================
 // STORAGE
 // =====================================================
-const DB={
-  get(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch{return null;}},
-  set(k,v){localStorage.setItem(k,JSON.stringify(v));}
-};
+const API_URL =
+"https://script.google.com/macros/s/AKfycbxNsk75dLV13SDAfXgK1XOMgafZjxhtFf43PT_Ax_ZzoIYA7zE59xqEalCtK5_tNPAZRw/exec";
+
+async function api(
+ acao,
+ dados={}
+){
+
+ const r =
+ await fetch(API_URL,{
+  method:"POST",
+  body:JSON.stringify({
+   acao,
+   ...dados
+  })
+ });
+
+ return await r.json();
+
+}
+
+async function carregarClientes(){
+
+  clientes = await api('listarClientes');
+
+  renderClientesTable();
+
+  renderClienteList();
+
+}
+
+async function carregarFuncionarios(){
+
+  funcionarios =
+    await api('listarFuncionarios');
+
+  renderFuncTable();
+
+  refreshFuncSelect();
+
+}
+
+async function carregarProdutos(){
+
+  produtos =
+    await api('listarProdutos');
+
+  renderProdutosTable();
+
+  renderProducts();
+
+}
 
 // =====================================================
 // STATE
@@ -499,6 +547,11 @@ let selectedPayMethod=null;
 let selectedCliente=null;
 let caixaAtual=null;
 let notifyTarget=null; // cliente sendo notificado
+
+
+let clientes = [];
+let funcionarios = [];
+let produtos = [];
 
 // =====================================================
 // UTILS
@@ -622,24 +675,16 @@ async function autoLoadExcel(){
 // INIT DEFAULTS
 // =====================================================
 function initDefaults(){
-  if(!DB.get('adminPass')) DB.set('adminPass','admin123');
-  if(!DB.get('funcionarios')) DB.set('funcionarios',[
-    {id:1,nome:'Maria',senha:'1234'},
-    {id:2,nome:'João',senha:'1234'}
-  ]);
-  if(!DB.get('produtos')) DB.set('produtos',[
-    {id:1,emoji:'🥤',nome:'Suco Natural',categoria:'Bebidas',preco:6.00},
-    {id:2,emoji:'☕',nome:'Café',categoria:'Bebidas',preco:3.50},
-    {id:3,emoji:'🥪',nome:'Misto Quente',categoria:'Lanches',preco:9.00},
-    {id:4,emoji:'🍕',nome:'Fatia de Pizza',categoria:'Lanches',preco:8.50},
-    {id:5,emoji:'🍞',nome:'Pão de Queijo',categoria:'Salgados',preco:4.00},
-    {id:6,emoji:'🥧',nome:'Coxinha',categoria:'Salgados',preco:5.00},
-    {id:7,emoji:'🍫',nome:'Chocolate',categoria:'Doces',preco:4.50},
-    {id:8,emoji:'🍰',nome:'Fatia de Bolo',categoria:'Doces',preco:7.00},
-  ]);
-  if(!DB.get('clientes')) DB.set('clientes',[]);
-  if(!DB.get('vendas'))   DB.set('vendas',[]);
-  if(!DB.get('caixas'))   DB.set('caixas',[]);
+
+  if(!localStorage.getItem('adminPass')){
+
+    localStorage.setItem(
+      'adminPass',
+      'admin123'
+    );
+
+  }
+
 }
 
 // BOOT SEQUENCE
@@ -653,7 +698,15 @@ function initDefaults(){
   setLoading('Pronto!',100);
   await new Promise(r=>setTimeout(r,400));
   hideLoading();
+
+  await carregarFuncionarios();
+
+  await carregarProdutos();
+
+  await carregarClientes();
+
   refreshFuncSelect();
+
   showScreen('loginScreen');
 })();
 
@@ -661,32 +714,74 @@ function initDefaults(){
 // ALERTAS DE CRÉDITO
 // =====================================================
 function checkAllCreditAlerts(){
-  const clientes=DB.get('clientes')||[];
-  clientes.forEach(c=>{
-    const saldo=c.limite-c.usado;
-    const limiar=c.alerta||25;
-    if(saldo<=limiar && saldo>=0){
-      console.log(`[Alerta] ${c.nome} - saldo R$${saldo.toFixed(2)}`);
+
+  (clientes || []).forEach(c=>{
+
+    const saldo =
+      Number(c.limite || 0) -
+      Number(c.usado || 0);
+
+    const limiar =
+      Number(c.alerta || 25);
+
+    if(saldo <= limiar && saldo >= 0){
+
+      console.log(
+        `[Alerta] ${c.nome} - saldo R$${saldo.toFixed(2)}`
+      );
+
     }
+
   });
+
 }
+
 function checkCreditoAposVenda(clienteId){
-  const clientes=DB.get('clientes')||[];
-  const c=clientes.find(x=>x.id===clienteId);
+
+  const c = clientes.find(
+    x => String(x.id) === String(clienteId)
+  );
+
   if(!c) return;
-  const saldo=c.limite-c.usado;
-  const limiar=c.alerta||25;
-  if(saldo<=limiar && saldo>=0){
-    notifyTarget=c;
-    document.getElementById('notifyClienteInfo').innerHTML=`
+
+  const saldo =
+    Number(c.limite || 0) -
+    Number(c.usado || 0);
+
+  const limiar =
+    Number(c.alerta || 25);
+
+  if(saldo <= limiar && saldo >= 0){
+
+    notifyTarget = c;
+
+    document.getElementById('notifyClienteInfo').innerHTML = `
       <div style="background:rgba(239,68,68,.1);border:1px solid var(--red);border-radius:10px;padding:12px;margin-bottom:4px">
-        <div style="font-weight:700;font-size:15px">⚠️ ${c.nome}</div>
-        <div style="font-size:13px;color:var(--muted)">Saldo: <b style="color:var(--red)">${fmt(saldo)}</b> (limite: ${fmt(c.limite)})</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px">Limite de alerta: ${fmt(limiar)}</div>
-      </div>`;
-    setTimeout(()=>showModal('notifyModal'),500);
+        <div style="font-weight:700;font-size:15px">
+          ⚠️ ${c.nome}
+        </div>
+        <div style="font-size:13px;color:var(--muted)">
+          Saldo:
+          <b style="color:var(--red)">
+            ${fmt(saldo)}
+          </b>
+          (limite: ${fmt(c.limite)})
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">
+          Limite de alerta: ${fmt(limiar)}
+        </div>
+      </div>
+    `;
+
+    setTimeout(
+      ()=>showModal('notifyModal'),
+      500
+    );
+
   }
+
 }
+
 function enviarNotificacao(tipo){
   if(!notifyTarget) return;
   const c=notifyTarget;
@@ -718,24 +813,73 @@ function switchLoginTab(tab){
   document.getElementById('loginAdmin').classList.toggle('hidden',tab!=='admin');
 }
 function refreshFuncSelect(){
-  const funcs=DB.get('funcionarios')||[];
-  const sel=document.getElementById('selFunc');
-  sel.innerHTML=funcs.map(f=>`<option value="${f.id}">${f.nome}</option>`).join('');
+
+  const sel =
+    document.getElementById('selFunc');
+
+  if(!sel) return;
+
+  sel.innerHTML = (funcionarios || [])
+
+    .map(f => `
+      <option value="${f.id}">
+        ${f.nome}
+      </option>
+    `)
+
+    .join('');
+
 }
 function loginFuncionario(){
-  const id=Number(document.getElementById('selFunc').value);
-  const pass=document.getElementById('inFuncPass').value;
-  const f=(DB.get('funcionarios')||[]).find(x=>x.id===id);
-  if(!f||f.senha!==pass){toast('❌ Senha incorreta');return;}
-  currentUser={id:f.id,nome:f.nome,role:'func'};
-  document.getElementById('pdvUserBadge').textContent='👤 '+f.nome;
-  caixaAtual=getCurrentCaixa();
+
+  const id =
+    document.getElementById('selFunc').value;
+
+  const pass =
+    document.getElementById('inFuncPass').value;
+
+  const f =
+    funcionarios.find(
+      x => String(x.id) === String(id)
+    );
+
+  if(!f || f.senha !== pass){
+
+    toast('❌ Senha incorreta');
+
+    return;
+
+  }
+
+  currentUser = {
+    id:f.id,
+    nome:f.nome,
+    role:'func'
+  };
+
+  document.getElementById(
+    'pdvUserBadge'
+  ).textContent =
+    '👤 ' + f.nome;
+
+  caixaAtual =
+    getCurrentCaixa();
+
   updateCaixaBtn();
   updateCaixaWarnBanner();
+
   renderProducts();
+
   showScreen('pdvScreen');
-  toast('✅ Bem-vindo, '+f.nome+'!');
+
+  toast(
+    '✅ Bem-vindo, ' +
+    f.nome +
+    '!'
+  );
+
 }
+
 function loginAdmin(){
   const pass=document.getElementById('inAdminPass').value;
   if(pass!==DB.get('adminPass')){toast('❌ Senha incorreta');return;}
@@ -987,18 +1131,49 @@ function renderClienteList(){
     </div>`;
   }).join('')||'<div style="color:var(--muted);font-size:13px;padding:10px">Nenhum cliente encontrado</div>';
 }
+
 function selectCliente(id){
-  const c=(DB.get('clientes')||[]).find(x=>x.id===id);
-  if(!c)return;
-  selectedCliente=c;
-  document.getElementById('cliSelNome').textContent=c.nome;
-  document.getElementById('cliSelLimite').textContent=fmt(c.limite);
-  const saldo=c.limite-c.usado;
-  const el=document.getElementById('cliSelSaldo');
-  el.textContent=fmt(saldo);el.style.color=saldo<getCartTotal()?'var(--red)':'var(--green)';el.style.fontWeight='700';
-  document.getElementById('clienteSelecionado').classList.remove('hidden');
+
+  const c = clientes.find(
+    x => String(x.id) === String(id)
+  );
+
+  if(!c) return;
+
+  selectedCliente = c;
+
+  document.getElementById('cliSelNome').textContent =
+    c.nome;
+
+  document.getElementById('cliSelLimite').textContent =
+    fmt(c.limite);
+
+  const saldo =
+    c.limite - c.usado;
+
+  const el =
+    document.getElementById('cliSelSaldo');
+
+  el.textContent =
+    fmt(saldo);
+
+  el.style.color =
+    saldo < getCartTotal()
+    ? 'var(--red)'
+    : 'var(--green)';
+
+  el.style.fontWeight =
+    '700';
+
+  document
+    .getElementById('clienteSelecionado')
+    .classList
+    .remove('hidden');
+
   renderClienteList();
+
 }
+
 function confirmarVenda(){
   if(!selectedPayMethod){toast('Selecione a forma de pagamento');return;}
   const total=getCartTotal();
@@ -1103,47 +1278,262 @@ function editProduto(id){
   }
   showModal('prodModal');
 }
-function salvarProduto(){
-  const id=document.getElementById('prodId').value;
-  const fotoBase64=document.getElementById('prodFotoNome').value.trim();
-  const emoji=document.getElementById('prodEmoji').value.trim();
-  const p={
-    emoji: fotoBase64 ? '' : (emoji||'🍽️'),
-    nome:  document.getElementById('prodNome').value.trim(),
-    categoria: document.getElementById('prodCat').value.trim()||'Geral',
-    preco: parseFloat(document.getElementById('prodPreco').value)||0,
-    foto:  fotoBase64 || null
+async function salvarProduto(){
+
+  const id = document.getElementById('prodId').value;
+
+  const fotoBase64 =
+    document.getElementById('prodFotoNome').value.trim();
+
+  const emoji =
+    document.getElementById('prodEmoji').value.trim();
+
+  const p = {
+
+    id: id || uuid(),
+
+    emoji: fotoBase64 ? '' : (emoji || '🍽️'),
+
+    nome:
+      document.getElementById('prodNome').value.trim(),
+
+    categoria:
+      document.getElementById('prodCat').value.trim() || 'Geral',
+
+    preco:
+      parseFloat(
+        document.getElementById('prodPreco').value
+      ) || 0,
+
+    foto:
+      fotoBase64 || null
+
   };
-  if(!p.nome){toast('Informe o nome');return;}
-  const produtos=DB.get('produtos')||[];
-  if(id){const idx=produtos.findIndex(x=>x.id===Number(id));if(idx>=0)produtos[idx]={...produtos[idx],...p};}
-  else produtos.push({...p,id:uuid()});
-  DB.set('produtos',produtos);
-  closeModal('prodModal');
-  renderProdutosTable();
-  renderProducts();
-  toast('✅ Produto salvo!');
+
+  if(!p.nome){
+    toast('Informe o nome');
+    return;
+  }
+
+  try{
+
+    await api('salvarProduto', p);
+
+    closeModal('prodModal');
+
+    await carregarProdutos();
+
+    renderProdutosTable();
+
+    renderProducts();
+
+    toast('✅ Produto salvo!');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('Erro ao salvar produto');
+
+  }
+
 }
-function deleteProduto(id){if(!confirm('Remover produto?'))return;DB.set('produtos',(DB.get('produtos')||[]).filter(p=>p.id!==id));renderProdutosTable();toast('Produto removido');}
+async function deleteProduto(id){
+
+  if(!confirm('Remover produto?')){
+    return;
+  }
+
+  try{
+
+    await api('excluirProduto',{
+      id:id
+    });
+
+    await carregarProdutos();
+
+    renderProdutosTable();
+
+    renderProducts();
+
+    toast('✅ Produto removido');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('❌ Erro ao remover produto');
+
+  }
+
+}
 
 function renderFuncTable(){
-  document.getElementById('funcTbody').innerHTML=(DB.get('funcionarios')||[]).map(f=>`
-    <tr><td style="font-weight:600">${f.nome}</td><td><span class="badge badge-blue">Funcionário</span></td>
-    <td class="actions"><button class="btn btn-ghost btn-sm" onclick="editFunc(${f.id})">✏️</button><button class="btn btn-red btn-sm" onclick="deleteFunc(${f.id})">🗑️</button></td></tr>
-  `).join('')||'<tr><td colspan="3" style="color:var(--muted);text-align:center">Nenhum funcionário</td></tr>';
+
+  document.getElementById('funcTbody').innerHTML =
+
+  (funcionarios || []).map(f => `
+
+    <tr>
+
+      <td style="font-weight:600">
+        ${f.nome}
+      </td>
+
+      <td>
+        <span class="badge badge-blue">
+          ${f.perfil || 'Funcionário'}
+        </span>
+      </td>
+
+      <td class="actions">
+
+        <button
+          class="btn btn-ghost btn-sm"
+          onclick="editFunc('${f.id}')">
+
+          ✏️
+
+        </button>
+
+        <button
+          class="btn btn-red btn-sm"
+          onclick="deleteFunc('${f.id}')">
+
+          🗑️
+
+        </button>
+
+      </td>
+
+    </tr>
+
+  `).join('')
+
+  ||
+
+  `<tr>
+     <td colspan="3"
+         style="color:var(--muted);text-align:center">
+         Nenhum funcionário
+     </td>
+   </tr>`;
+
 }
 function openFuncModal(){document.getElementById('funcModalTitle').textContent='Novo Funcionário';document.getElementById('funcId').value='';document.getElementById('funcNome').value='';document.getElementById('funcSenha').value='';showModal('funcModal');}
-function editFunc(id){const f=(DB.get('funcionarios')||[]).find(x=>x.id===id);if(!f)return;document.getElementById('funcModalTitle').textContent='Editar Funcionário';document.getElementById('funcId').value=f.id;document.getElementById('funcNome').value=f.nome;document.getElementById('funcSenha').value=f.senha;showModal('funcModal');}
-function salvarFuncionario(){
-  const id=document.getElementById('funcId').value;
-  const f={nome:document.getElementById('funcNome').value.trim(),senha:document.getElementById('funcSenha').value};
-  if(!f.nome||!f.senha){toast('Preencha nome e senha');return;}
-  const funcs=DB.get('funcionarios')||[];
-  if(id){const idx=funcs.findIndex(x=>x.id===Number(id));if(idx>=0)funcs[idx]={...funcs[idx],...f};}
-  else funcs.push({...f,id:uuid()});
-  DB.set('funcionarios',funcs);closeModal('funcModal');renderFuncTable();refreshFuncSelect();toast('✅ Funcionário salvo!');
+
+function editFunc(id){
+
+  const f =
+    funcionarios.find(
+      x => String(x.id) === String(id)
+    );
+
+  if(!f) return;
+
+  document.getElementById(
+    'funcModalTitle'
+  ).textContent =
+    'Editar Funcionário';
+
+  document.getElementById(
+    'funcId'
+  ).value = f.id;
+
+  document.getElementById(
+    'funcNome'
+  ).value = f.nome;
+
+  document.getElementById(
+    'funcSenha'
+  ).value = f.senha;
+
+  showModal('funcModal');
+
 }
-function deleteFunc(id){if(!confirm('Remover funcionário?'))return;DB.set('funcionarios',(DB.get('funcionarios')||[]).filter(f=>f.id!==id));renderFuncTable();refreshFuncSelect();toast('Funcionário removido');}
+
+async function salvarFuncionario(){
+
+  const id =
+    document.getElementById('funcId').value;
+
+  const f = {
+
+    id: id || uuid(),
+
+    nome:
+      document.getElementById('funcNome')
+      .value.trim(),
+
+    senha:
+      document.getElementById('funcSenha')
+      .value,
+
+    perfil: "Funcionário"
+
+  };
+
+  if(!f.nome || !f.senha){
+
+    toast('Preencha nome e senha');
+
+    return;
+
+  }
+
+  try{
+
+    await api(
+      'salvarFuncionario',
+      f
+    );
+
+    closeModal('funcModal');
+
+    await carregarFuncionarios();
+
+    refreshFuncSelect();
+
+    toast('✅ Funcionário salvo!');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('❌ Erro ao salvar funcionário');
+
+  }
+
+}
+async function deleteFunc(id){
+
+  if(!confirm('Remover funcionário?')){
+    return;
+  }
+
+  try{
+
+    await api('excluirFuncionario',{
+      id:id
+    });
+
+    await carregarFuncionarios();
+
+    refreshFuncSelect();
+
+    renderFuncTable();
+
+    toast('✅ Funcionário removido');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('❌ Erro ao remover funcionário');
+
+  }
+
+}
 
 function renderClientesTable(){
   const clientes=DB.get('clientes')||[];
@@ -1165,18 +1555,139 @@ function renderClientesTable(){
       </td></tr>`;
   }).join('')||'<tr><td colspan="8" style="color:var(--muted);text-align:center">Nenhum cliente</td></tr>';
 }
-function openClienteModal(){['clienteId','clienteNome','clienteTel','clienteEmail','clienteLimite'].forEach(id=>document.getElementById(id).value='');document.getElementById('clienteAlerta').value='25';document.getElementById('clienteModalTitle').textContent='Novo Cliente';showModal('clienteModal');}
-function editCliente(id){const c=(DB.get('clientes')||[]).find(x=>x.id===id);if(!c)return;document.getElementById('clienteModalTitle').textContent='Editar Cliente';document.getElementById('clienteId').value=c.id;document.getElementById('clienteNome').value=c.nome;document.getElementById('clienteTel').value=c.telefone;document.getElementById('clienteEmail').value=c.email||'';document.getElementById('clienteLimite').value=c.limite;document.getElementById('clienteAlerta').value=c.alerta||25;showModal('clienteModal');}
-function salvarCliente(){
-  const id=document.getElementById('clienteId').value;
-  const c={nome:document.getElementById('clienteNome').value.trim(),telefone:document.getElementById('clienteTel').value.trim(),email:document.getElementById('clienteEmail').value.trim(),limite:parseFloat(document.getElementById('clienteLimite').value)||0,alerta:parseFloat(document.getElementById('clienteAlerta').value)||25};
-  if(!c.nome||!c.telefone){toast('Preencha nome e telefone');return;}
-  const clientes=DB.get('clientes')||[];
-  if(id){const idx=clientes.findIndex(x=>x.id===Number(id));if(idx>=0)clientes[idx]={...clientes[idx],...c};}
-  else clientes.push({...c,id:uuid(),usado:0});
-  DB.set('clientes',clientes);closeModal('clienteModal');renderClientesTable();toast('✅ Cliente salvo!');
+
+function editCliente(id){
+
+  const c = clientes.find(
+    x => String(x.id) === String(id)
+  );
+
+  if(!c) return;
+
+  document.getElementById('clienteModalTitle').textContent =
+    'Editar Cliente';
+
+  document.getElementById('clienteId').value =
+    c.id;
+
+  document.getElementById('clienteNome').value =
+    c.nome;
+
+  document.getElementById('clienteTel').value =
+    c.telefone;
+
+  document.getElementById('clienteEmail').value =
+    c.email || '';
+
+  document.getElementById('clienteLimite').value =
+    c.limite;
+
+  document.getElementById('clienteAlerta').value =
+    c.alerta || 25;
+
+  showModal('clienteModal');
+
 }
-function deleteCliente(id){if(!confirm('Remover cliente?'))return;DB.set('clientes',(DB.get('clientes')||[]).filter(c=>c.id!==id));renderClientesTable();toast('Cliente removido');}
+
+async function salvarCliente(){
+
+  const id =
+    document.getElementById('clienteId').value;
+
+  const c = {
+
+    id: id || uuid(),
+
+    nome:
+      document.getElementById('clienteNome')
+      .value.trim(),
+
+    telefone:
+      document.getElementById('clienteTel')
+      .value.trim(),
+
+    email:
+      document.getElementById('clienteEmail')
+      .value.trim(),
+
+    limite:
+      parseFloat(
+        document.getElementById('clienteLimite').value
+      ) || 0,
+
+    alerta:
+      parseFloat(
+        document.getElementById('clienteAlerta').value
+      ) || 25,
+
+    usado: 0
+
+  };
+
+  if(!c.nome || !c.telefone){
+
+    toast('Preencha nome e telefone');
+
+    return;
+
+  }
+
+  try{
+
+    await api(
+      'salvarCliente',
+      c
+    );
+
+    closeModal('clienteModal');
+
+    await carregarClientes();
+
+    renderClientesTable();
+
+    toast('✅ Cliente salvo!');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('❌ Erro ao salvar cliente');
+
+  }
+
+}
+
+async function deleteCliente(id){
+
+  if(!confirm('Remover cliente?')){
+    return;
+  }
+
+  try{
+
+    await api(
+      'excluirCliente',
+      {
+        id:id
+      }
+    );
+
+    await carregarClientes();
+
+    renderClientesTable();
+
+    toast('✅ Cliente removido');
+
+  }catch(err){
+
+    console.error(err);
+
+    toast('❌ Erro ao remover cliente');
+
+  }
+
+}
+
 function resetCredito(id){if(!confirm('Zerar crédito usado?'))return;const cl=DB.get('clientes')||[];const idx=cl.findIndex(c=>c.id===id);if(idx>=0){cl[idx].usado=0;DB.set('clientes',cl);}renderClientesTable();toast('Crédito zerado');}
 function openNotifyModal(id){
   const c=(DB.get('clientes')||[]).find(x=>x.id===id);if(!c)return;
