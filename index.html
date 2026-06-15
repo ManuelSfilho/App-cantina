@@ -467,2470 +467,688 @@ label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bot
 </div>
 
 <script>
-// =====================================================
-// STORAGE
-// =====================================================
-const API_URL =
-"https://script.google.com/macros/s/AKfycbyjLvs6lOtEM_3bjOkJfZxocUi7_DcWF9RrpEdMxYN53rG8WFY3cswvNoFLUgsNyY5iVQ/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyjLvs6lOtEM_3bjOkJfZxocUi7_DcWF9RrpEdMxYN53rG8WFY3cswvNoFLUgsNyY5iVQ/exec";
 
-async function api(acao, dados={}){
+// ── API via GET (sem CORS) ────────────────────────────────────────────────
+async function api(acao, dados){
+  dados = dados || {};
   try {
-    const ctrl = new AbortController();
-    const tid  = setTimeout(()=>ctrl.abort(), 12000); // 12s timeout
-    const r = await fetch(API_URL, {
-      method: 'POST',
-      body:   JSON.stringify({ acao, ...dados }),
-      signal: ctrl.signal
-    });
-    clearTimeout(tid);
+    var payload = encodeURIComponent(JSON.stringify(Object.assign({acao:acao}, dados)));
+    var r = await fetch(API_URL + '?payload=' + payload);
     return await r.json();
   } catch(e) {
-    console.warn('[API erro]', acao, e.message);
+    console.warn('[API]', acao, e.message);
     return null;
   }
 }
 
-async function carregarClientes(){
+// ── ESTADO ────────────────────────────────────────────────────────────────
+var currentUser = null;
+var cart = [];
+var selectedPayMethod = null;
+var selectedCliente = null;
+var caixaAtual = null;
+var produtos = [];
+var clientes = [];
+var funcionarios = [];
+var vendas = [];
+var caixas = [];
 
-  const raw = await api('listarClientes');
+// ── UTILS ─────────────────────────────────────────────────────────────────
+function fmt(v){ return 'R$ ' + Number(v||0).toFixed(2).replace('.',','); }
+function dateStr(t){ return new Date(Number(t)||0).toLocaleString('pt-BR'); }
+function dateOnly(t){ return new Date(Number(t)||0).toLocaleDateString('pt-BR'); }
+function timeOnly(t){ return new Date(Number(t)||0).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+function uid(){ return Date.now() + '' + Math.floor(Math.random()*9999); }
 
-  clientes = (Array.isArray(raw) ? raw : []).map(c => ({
-    id:       c.id,
-    nome:     c.nome     || '',
-    telefone: c.telefone || '',
-    email:    c.email    || '',
-    limite:   Number(c.limite || 0),
-    usado:    Number(c.usado  || 0),
-    alerta:   Number(c.alerta || 25)
-  }));
-
-  renderClientesTable();
-
-  renderClienteList();
-
+function toast(msg, dur){
+  dur = dur || 2800;
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(window._tt);
+  window._tt = setTimeout(function(){ t.classList.remove('show'); }, dur);
 }
+function showModal(id){ document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id){ document.getElementById(id).classList.add('hidden'); }
+function setEl(id, val){ var e=document.getElementById(id); if(e) e.textContent=val; }
+function getVal(id){ var e=document.getElementById(id); return e ? e.value : ''; }
+function setVal(id, val){ var e=document.getElementById(id); if(e) e.value=val; }
 
-async function carregarFuncionarios(){
-
-  const raw = await api('listarFuncionarios');
-
-  funcionarios = (Array.isArray(raw) ? raw : []).map(f => ({
-    id:      f.id,
-    nome:    f.nome    || '',
-    usuario: f.usuario || '',
-    senha:   f.senha   || '',
-    perfil:  f.perfil  || 'Funcionário'
-  }));
-
-  renderFuncTable();
-
-  refreshFuncSelect();
-
-}
-
-async function carregarProdutos(){
-
-  const raw = await api('listarProdutos');
-
-  // listarProdutos retorna array de arrays (linhas brutas do Sheet)
-  // colunas: [0]id [1]codigo [2]nome [3]categoria [4]preco [5]ativo
-  const rows = Array.isArray(raw) ? raw : [];
-  // pula header (linha 0)
-  produtos = rows.slice(1).filter(r => r[2]).map(r => ({
-    id:        r[0] || uuid(),
-    codigo:    r[1] || '',
-    nome:      String(r[2] || ''),
-    categoria: String(r[3] || 'Geral'),
-    preco:     Number(r[4] || 0),
-    ativo:     r[5] || 'Sim',
-    emoji:     '🍽️',
-    foto:      null
-  }));
-
-  renderProdutosTable();
-
-  renderProducts();
-
-}
-
-function getCurrentCaixa(){
-
-  const caixas = Array.isArray(window.caixas)
-    ? window.caixas
-    : [];
-
-  return caixas.find(c => !c.fechamento || c.fechamento === '' || c.status === 'Aberto') || null;
-
-}
-
-async function carregarVendas(){
-  // Vendas ficam em memória + localStorage (Apps Script não tem listarVendas ainda)
-  const raw = localStorage.getItem('cantina_vendas');
-  vendas = raw ? JSON.parse(raw) : [];
-}
-
-function salvarVendasLocal(){
-  localStorage.setItem('cantina_vendas', JSON.stringify(vendas));
-}
-
-async function carregarCaixas(){
-
-  const dados = await api('listarCaixas');
-
-  window.caixas = Array.isArray(dados)
-    ? dados
-    : [];
-
-  caixaAtual = getCurrentCaixa();
-
-  updateCaixaStatusUI();
-
-}
-// =====================================================
-// STATE
-// =====================================================
-let currentUser=null;
-let cart=[];
-let selectedPayMethod=null;
-let selectedCliente=null;
-let caixaAtual=null;
-let notifyTarget=null; // cliente sendo notificado
-
-
-let clientes = [];
-let funcionarios = [];
-let produtos = [];
-let caixas = [];
-let vendas = [];
-
-// =====================================================
-// UTILS
-// =====================================================
-function fmt(v){return 'R$ '+Number(v||0).toFixed(2).replace('.',',');}
-function ts(){return Date.now();}
-function dateStr(t){return new Date(t).toLocaleString('pt-BR');}
-function dateOnly(t){return new Date(t).toLocaleDateString('pt-BR');}
-function timeOnly(t){return new Date(t).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
-function uuid(){return Date.now()+Math.floor(Math.random()*9999);}
-function cleanPhone(p){return String(p||'').replace(/\D/g,'');}
-
-function toast(msg,dur=2800){
-  const t=document.getElementById('toast');
-  t.textContent=msg;t.classList.add('show');
-  clearTimeout(window._tt);window._tt=setTimeout(()=>t.classList.remove('show'),dur);
-}
-function showModal(id){document.getElementById(id).classList.remove('hidden');}
-function closeModal(id){document.getElementById(id).classList.add('hidden');}
 function showScreen(id){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('.screen').forEach(function(s){ s.classList.remove('active'); });
+  var el = document.getElementById(id);
+  if(el) el.classList.add('active');
+  history.pushState({screen:id}, '');
 }
 
-// =====================================================
-// LOADING OVERLAY
-// =====================================================
-function setLoading(msg,pct){
-  document.getElementById('loadingMsg').textContent=msg;
-  document.getElementById('loadingBar').style.width=pct+'%';
-}
 function hideLoading(){
-  setTimeout(()=>{document.getElementById('loadingOverlay').style.display='none';},300);
+  var ov = document.getElementById('loadingOverlay');
+  if(ov) ov.style.display = 'none';
 }
 
-// =====================================================
-// EXCEL AUTO-LOAD (produtos.xlsx + clientes.xlsx)
-// =====================================================
-function parseExcelProdutos(buf){
-  const wb=XLSX.read(new Uint8Array(buf),{type:'array'});
-  const ws=wb.Sheets[wb.SheetNames[0]];
-  const rows=XLSX.utils.sheet_to_json(ws,{header:1});
-  const produtos=[];
-  for(let i=1;i<rows.length;i++){
-    const r=rows[i];
-    if(!r[1]) continue;
-    produtos.push({
-      id:Number(r[0])||uuid(),
-      emoji:String(r[1]||'🍽️').trim(),
-      nome:String(r[2]||'').trim(),
-      categoria:String(r[3]||'Geral').trim(),
-      preco:parseFloat(r[4])||0,
-      foto: null   // foto (base64) só via UI do app, não do Excel
-    });
-  }
-  return produtos;
-}
-function parseExcelClientes(buf){
-  const wb=XLSX.read(new Uint8Array(buf),{type:'array'});
-  const ws=wb.Sheets[wb.SheetNames[0]];
-  const rows=XLSX.utils.sheet_to_json(ws,{header:1});
-  const clientes=[];
-  for(let i=1;i<rows.length;i++){
-    const r=rows[i];
-    if(!r[1]) continue;
-    clientes.push({
-      id:Number(r[0])||uuid(),
-      nome:String(r[1]||'').trim(),
-      telefone:String(r[2]||'').trim(),
-      email:String(r[3]||'').trim(),
-      limite:parseFloat(r[4])||0,
-      alerta:parseFloat(r[5])||25,
-      usado:parseFloat(r[6])||0
-    });
-  }
-  return clientes;
-}
-
-async function autoLoadExcel(){
-  return;
-}
-
-// =====================================================
-// INIT DEFAULTS
-// =====================================================
-function initDefaults(){
-
-  if(!localStorage.getItem('adminPass')){
-
-    localStorage.setItem(
-      'adminPass',
-      'admin123'
-    );
-
-  }
-
-}
-
-// BOOT SEQUENCE
-(async()=>{
-  initDefaults();
-  await carregarVendas(); // local, instantâneo
-
-  // Mostra login imediatamente sem esperar a API
+// ── BOOT ──────────────────────────────────────────────────────────────────
+(function boot(){
+  if(!localStorage.getItem('adminPass')) localStorage.setItem('adminPass','admin123');
+  try { vendas = JSON.parse(localStorage.getItem('cantina_vendas') || '[]'); } catch(e){ vendas=[]; }
   hideLoading();
   showScreen('loginScreen');
-
-  // Carrega dados da API em background
-  setLoading('Conectando...', 20);
-  document.getElementById('loadingOverlay').style.display = 'flex';
-
-  try {
-    setLoading('Carregando produtos...', 35);
-    await carregarProdutos();
-
-    setLoading('Carregando clientes...', 55);
-    await carregarClientes();
-
-    setLoading('Carregando funcionários...', 75);
-    await carregarFuncionarios();
-
-    setLoading('Carregando caixa...', 90);
-    await carregarCaixas();
-
-    refreshFuncSelect();
-    checkAllCreditAlerts();
-  } catch(e) {
-    console.warn('Erro no carregamento:', e);
-    toast('⚠️ Erro ao conectar. Verifique a internet.');
-  }
-
-  setLoading('Pronto!', 100);
-  await new Promise(r=>setTimeout(r,300));
-  hideLoading();
-  showScreen('loginScreen');
+  // carrega API em background
+  carregarTudo();
 })();
 
-// =====================================================
-// ALERTAS DE CRÉDITO
-// =====================================================
-function checkAllCreditAlerts(){
-
-  (clientes || []).forEach(c=>{
-
-    const saldo =
-      Number(c.limite || 0) -
-      Number(c.usado || 0);
-
-    const limiar =
-      Number(c.alerta || 25);
-
-    if(saldo <= limiar && saldo >= 0){
-
-      console.log(
-        `[Alerta] ${c.nome} - saldo R$${saldo.toFixed(2)}`
-      );
-
-    }
-
-  });
-
+async function carregarTudo(){
+  await Promise.all([carregarProdutos(), carregarClientes(), carregarFuncionarios(), carregarCaixas()]);
+  refreshFuncSelect();
 }
 
-function checkCreditoAposVenda(clienteId){
-
-  const c = clientes.find(
-    x => String(x.id) === String(clienteId)
-  );
-
-  if(!c) return;
-
-  const saldo =
-    Number(c.limite || 0) -
-    Number(c.usado || 0);
-
-  const limiar =
-    Number(c.alerta || 25);
-
-  if(saldo <= limiar && saldo >= 0){
-
-    notifyTarget = c;
-
-    document.getElementById('notifyClienteInfo').innerHTML = `
-      <div style="background:rgba(239,68,68,.1);border:1px solid var(--red);border-radius:10px;padding:12px;margin-bottom:4px">
-        <div style="font-weight:700;font-size:15px">
-          ⚠️ ${c.nome}
-        </div>
-        <div style="font-size:13px;color:var(--muted)">
-          Saldo:
-          <b style="color:var(--red)">
-            ${fmt(saldo)}
-          </b>
-          (limite: ${fmt(c.limite)})
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px">
-          Limite de alerta: ${fmt(limiar)}
-        </div>
-      </div>
-    `;
-
-    setTimeout(
-      ()=>showModal('notifyModal'),
-      500
-    );
-
-  }
-
-}
-
-function enviarNotificacao(tipo){
-  if(!notifyTarget) return;
-  const c=notifyTarget;
-  const saldo=(c.limite-c.usado).toFixed(2).replace('.',',');
-  const msg=`Olá ${c.nome}! Seu crédito na CantinaApp está baixo. Saldo disponível: R$ ${saldo}. Entre em contato para recarregar.`;
-  if(tipo==='whatsapp'){
-    const num=cleanPhone(c.telefone);
-    if(!num){toast('❌ Cliente sem telefone cadastrado');return;}
-    window.open(`https://wa.me/55${num}?text=${encodeURIComponent(msg)}`,'_blank');
-  } else if(tipo==='email'){
-    if(!c.email){toast('❌ Cliente sem email cadastrado');return;}
-    window.open(`mailto:${c.email}?subject=${encodeURIComponent('CantinaApp - Saldo de Crédito Baixo')}&body=${encodeURIComponent(msg)}`,'_blank');
-  } else if(tipo==='sms'){
-    const num=cleanPhone(c.telefone);
-    if(!num){toast('❌ Cliente sem telefone cadastrado');return;}
-    window.open(`sms:+55${num}?body=${encodeURIComponent(msg)}`,'_blank');
-  }
-  closeModal('notifyModal');
-  toast('✅ Notificação enviada para '+c.nome);
-}
-
-// =====================================================
-// LOGIN
-// =====================================================
+// ── LOGIN ─────────────────────────────────────────────────────────────────
 function switchLoginTab(tab){
-  document.getElementById('ltbFunc').classList.toggle('active',tab==='func');
-  document.getElementById('ltbAdmin').classList.toggle('active',tab==='admin');
-  document.getElementById('loginFunc').classList.toggle('hidden',tab!=='func');
-  document.getElementById('loginAdmin').classList.toggle('hidden',tab!=='admin');
-}
-function refreshFuncSelect(){
-
-  const sel =
-    document.getElementById('selFunc');
-
-  if(!sel) return;
-
-  sel.innerHTML = (funcionarios || [])
-
-    .map(f => `
-      <option value="${f.id}">
-        ${f.nome}
-      </option>
-    `)
-
-    .join('');
-
-}
-
-async function loginFuncionario(){
-
-  const funcId =
-    document.getElementById('selFunc').value;
-
-  const senha =
-    document.getElementById('inFuncPass').value;
-
-  if(!senha){
-    toast('❌ Digite a senha');
-    return;
-  }
-
-  // Busca o funcionário pelo id selecionado e valida a senha
-  const funcionario =
-    funcionarios.find(f =>
-      String(f.id) === String(funcId) &&
-      String(f.senha) === String(senha)
-    );
-
-  if(!funcionario){
-
-    toast('❌ Senha incorreta');
-
-    return;
-  }
-
-  currentUser = funcionario;
-
-  caixaAtual = getCurrentCaixa();
-
-  showScreen('pdvScreen');
-
-  toast('Login realizado');
-
+  document.getElementById('loginFunc').classList.toggle('hidden', tab!=='func');
+  document.getElementById('loginAdmin').classList.toggle('hidden', tab!=='admin');
+  document.getElementById('ltbFunc').classList.toggle('active', tab==='func');
+  document.getElementById('ltbAdmin').classList.toggle('active', tab==='admin');
 }
 
 function loginAdmin(){
-
-  const pass =
-    document.getElementById('inAdminPass').value;
-
-  if(pass !== 'admin123'){
-    toast('❌ Senha incorreta');
-    return;
-  }
-
-  currentUser = {
-    id:0,
-    nome:'Admin',
-    role:'admin'
-  };
-
-  caixaAtual = getCurrentCaixa();
-
-  refreshAdminPanels();
-
+  var pass = getVal('inAdminPass');
+  if(!pass){ toast('Digite a senha'); return; }
+  if(pass !== localStorage.getItem('adminPass')){ toast('❌ Senha incorreta'); return; }
+  currentUser = {id:'admin', nome:'Administrador', role:'admin'};
   showScreen('adminScreen');
-
-  toast('✅ Bem-vindo, Admin!');
-
+  switchAdminPanel('dashboard');
 }
 
-// =====================================================
-// CAIXA
-// =====================================================
-function getCurrentCaixa(){
-  return caixas.find(c=>!c.fechamento)||null;
-}
-
-function confirmarAbrirCaixa(){
-
-  const val =
-    parseFloat(document.getElementById('caixaInicial').value)||0;
-
-  const novo = {
-    id:uuid(),
-    abertura:ts(),
-    valorInicial:val,
-    fechamento:null,
-    funcionario:currentUser?.nome||'Admin'
-  };
-
-  caixas.push(novo);
-
-  caixaAtual = novo;
-
-  updateCaixaBtn();
-  updateCaixaWarnBanner();
-
-  closeModal('caixaModal');
-
-  toast('✅ Caixa aberto!');
-
-  updateCaixaStatusUI();
-}
-
-function fecharCaixa(){
-
-  if(!caixaAtual){
-    toast('Nenhum caixa aberto');
-    return;
-  }
-
-  const vendasCaixa =
-    vendas.filter(v=>v.caixaId===caixaAtual.id);
-
-  const totalGeral =
-    vendasCaixa.reduce((s,v)=>s+v.total,0);
-
-  const byMethod = {
-    dinheiro:0,
-    debito:0,
-    credito:0,
-    pix:0,
-    fiado:0
-  };
-
-  vendasCaixa.forEach(v=>{
-    if(byMethod[v.pagamento]!==undefined){
-      byMethod[v.pagamento]+=v.total;
-    }
-  });
-
-  let html = `
-  <div style="text-align:center;margin-bottom:14px">
-    <div style="font-size:12px;color:var(--muted)">Total Geral</div>
-    <div style="font-size:32px;font-weight:800;color:var(--amber)">
-      ${fmt(totalGeral)}
-    </div>
-    <div style="font-size:12px;color:var(--muted)">
-      ${vendasCaixa.length} venda(s)
-    </div>
-  </div>`;
-
-  document.getElementById('fechamentoResumo').innerHTML =
-    html;
-
-  showModal('fecharCaixaModal');
-}
-function updateCaixaBtn(){
-  const el=document.getElementById('btnCaixaLabel');
-  if(el) el.textContent=caixaAtual?'Fechar Caixa':'Abrir Caixa';
-}
-function updateCaixaWarnBanner(){
-  const banner=document.getElementById('caixaWarnBanner');
-  if(!banner) return;
-  banner.classList.toggle('hidden',!!caixaAtual);
-}
-function openCaixaModal(){
-  if(caixaAtual){fecharCaixa();return;}
-  document.getElementById('caixaInicial').value='';
-  showModal('caixaModal');
-}
-function abrirCaixa(){
-  document.getElementById('caixaInicial').value='';
-  showModal('caixaModal');
-}
-function confirmarAbrirCaixa(){
-
-  const val =
-    parseFloat(document.getElementById('caixaInicial').value) || 0;
-
-  const novo = {
-    id: uuid(),
-    abertura: ts(),
-    valorInicial: val,
-    fechamento: null,
-    funcionario: currentUser?.nome || 'Admin'
-  };
-
-  if(!window.caixas){
-    window.caixas = [];
-  }
-
-  window.caixas.push(novo);
-
-  caixaAtual = novo;
-
-  updateCaixaBtn();
-  updateCaixaWarnBanner();
-
-  closeModal('caixaModal');
-
-  toast('✅ Caixa aberto!');
-
-  updateCaixaStatusUI();
-
-}
-
-function fecharCaixa(){
-
-  if(!caixaAtual){
-    toast('Nenhum caixa aberto');
-    return;
-  }
-
-  const vendasCaixa =
-    (vendas || []).filter(
-      v => v.caixaId === caixaAtual.id
-    );
-
-  const totalGeral =
-    vendasCaixa.reduce(
-      (s,v) => s + Number(v.total || 0),
-      0
-    );
-
-  const byMethod = {
-    dinheiro:0,
-    debito:0,
-    credito:0,
-    pix:0,
-    fiado:0
-  };
-
-  vendasCaixa.forEach(v => {
-    if(byMethod[v.pagamento] !== undefined){
-      byMethod[v.pagamento] += Number(v.total || 0);
-    }
-  });
-
-  let html = `
-  <div style="text-align:center;margin-bottom:14px">
-    <div style="font-size:12px;color:var(--muted)">
-      Total Geral
-    </div>
-    <div style="font-size:32px;font-weight:800;color:var(--amber)">
-      ${fmt(totalGeral)}
-    </div>
-    <div style="font-size:12px;color:var(--muted)">
-      ${vendasCaixa.length} venda(s)
-    </div>
-  </div>
-
-  <div class="pay-summary-grid">
-    <div class="pay-summary-card">
-      <div class="ps-label">💵 Dinheiro</div>
-      <div class="ps-value" style="color:var(--green)">
-        ${fmt(byMethod.dinheiro)}
-      </div>
-    </div>
-
-    <div class="pay-summary-card">
-      <div class="ps-label">💳 Débito</div>
-      <div class="ps-value" style="color:var(--blue)">
-        ${fmt(byMethod.debito)}
-      </div>
-    </div>
-
-    <div class="pay-summary-card">
-      <div class="ps-label">💎 Crédito</div>
-      <div class="ps-value" style="color:var(--purple)">
-        ${fmt(byMethod.credito)}
-      </div>
-    </div>
-
-    <div class="pay-summary-card">
-      <div class="ps-label">⚡ Pix</div>
-      <div class="ps-value" style="color:var(--amber)">
-        ${fmt(byMethod.pix)}
-      </div>
-    </div>
-
-    <div class="pay-summary-card" style="grid-column:1/-1">
-      <div class="ps-label">🪙 Crédito Cliente</div>
-      <div class="ps-value" style="color:var(--muted)">
-        ${fmt(byMethod.fiado)}
-      </div>
-    </div>
-  </div>`;
-
-  document.getElementById('fechamentoResumo').innerHTML = html;
-
-  showModal('fecharCaixaModal');
-
-}
-
-function confirmarFecharEnviarPDF(){
-
-  if(!caixaAtual) return;
-
-  const idx =
-    caixas.findIndex(c => c.id === caixaAtual.id);
-
-  if(idx >= 0){
-
-    caixas[idx].fechamento = ts();
-
-  }
-
-  gerarRelatorioFechamentoPDF(
-    caixaAtual,
-    true
-  );
-
-  caixaAtual = null;
-
-  updateCaixaBtn();
-  updateCaixaWarnBanner();
-
-  closeModal('fecharCaixaModal');
-
-  updateCaixaStatusUI();
-
-  toast(
-    '✅ Caixa fechado! PDF gerado e WhatsApp aberto.'
-  );
-
-}
-
-function updateCaixaStatusUI(){
-
-  const cx = getCurrentCaixa();
-
-  const dot =
-    document.getElementById('caixaDot');
-
-  if(!dot) return;
-
-  if(cx){
-
-    dot.className = 'caixa-dot open';
-
-    document.getElementById('caixaStatusLabel')
-      .textContent = 'Caixa Aberto';
-
-    document.getElementById('caixaStatusSub')
-      .textContent =
-      'Aberto em ' +
-      dateStr(cx.abertura) +
-      ' por ' +
-      cx.funcionario;
-
-  } else {
-
-    dot.className = 'caixa-dot closed';
-
-    document.getElementById('caixaStatusLabel')
-      .textContent = 'Caixa Fechado';
-
-    document.getElementById('caixaStatusSub')
-      .textContent = 'Nenhum caixa aberto';
-
-  }
-
-  const tbody =
-    document.getElementById('caixaTbody');
-
-  if(!tbody) return;
-
-  const listaCaixas =
-    (caixas || []).slice().reverse();
-
-  tbody.innerHTML = listaCaixas.map(c => {
-
-    const vendasCaixa =
-      (vendas || []).filter(
-        v => v.caixaId === c.id
-      );
-
-    const total =
-      vendasCaixa.reduce(
-        (s,v) => s + Number(v.total || 0),
-        0
-      );
-
-    return `
-      <tr>
-        <td>${dateOnly(c.abertura)}</td>
-        <td>${fmt(c.valorInicial)}</td>
-        <td>${c.fechamento ? dateStr(c.fechamento) : '-'}</td>
-        <td>${vendasCaixa.length}</td>
-        <td style="font-weight:700;color:var(--amber)">
-          ${fmt(total)}
-        </td>
-        <td>
-          <span class="badge ${
-            c.fechamento
-              ? 'badge-muted'
-              : 'badge-green'
-          }">
-            ${c.fechamento ? 'Fechado' : 'Aberto'}
-          </span>
-        </td>
-        <td>
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick="exportCaixaPDF('${c.id}')">
-            📄 PDF
-          </button>
-        </td>
-      </tr>`;
-  }).join('')
-
-  || '<tr><td colspan="7" style="color:var(--muted);text-align:center">Nenhum caixa registrado</td></tr>';
-
-}
-
-// =====================================================
-// PDV - PRODUTOS
-// =====================================================
-// Retorna HTML do ícone do produto (foto base64 ou emoji)
-function prodIconHTML(p, size='grid'){
-  const inicial = (p.nome||'?')[0].toUpperCase();
-  const cores = ['#f59e0b','#3b82f6','#10b981','#8b5cf6','#ef4444','#06b6d4'];
-  const cor = cores[(p.nome||'').charCodeAt(0) % cores.length];
-  if(size==='grid'){
-    return `<div style="width:48px;height:48px;border-radius:12px;background:${cor}22;border:2px solid ${cor};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:${cor}">${inicial}</div>`;
-  }
-  return `<div style="width:32px;height:32px;border-radius:8px;background:${cor}22;border:1.5px solid ${cor};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:${cor};flex-shrink:0">${inicial}</div>`;
-}" class="p-img" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span style="display:none;font-size:28px">${p.emoji||'🍽️'}</span>`;
-    } else {
-      return `<img src="${p.foto}" class="p-img-thumb" onerror="this.outerHTML='<span style=\\'font-size:20px\\'>${p.emoji||'🍽️'}</span>'">`;
-    }
-  }
-  const fs = size==='grid' ? '28px' : '20px';
-  return `<span style="font-size:${fs}">${p.emoji||'🍽️'}</span>`;
-}
-
-function toggleEmojiField(hasFoto){}
-
-// Handlers do modal de produto
-function onFotoSelected(input){
-  const file = input.files[0];
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = (e)=>{
-    const base64 = e.target.result; // data:image/...;base64,...
-    document.getElementById('prodFotoNome').value = base64;
-    // preview
-    document.getElementById('fotoPreview').innerHTML =
-      `<img src="${base64}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;
-    document.getElementById('fotoNomeLabel').textContent = '✅ ' + file.name;
-    toggleEmojiField(true);
-  };
-  reader.readAsDataURL(file);
-}
-function removerFoto(){
-  document.getElementById('prodFotoNome').value = '';
-  document.getElementById('prodFotoFile').value = '';
-  const emoji = document.getElementById('prodEmoji').value || '🍽️';
-  document.getElementById('fotoPreview').innerHTML = `<span id="fotoPreviewEmoji">${emoji}</span>`;
-  document.getElementById('fotoNomeLabel').textContent = 'Nenhuma foto selecionada';
-  toggleEmojiField(false);
-}
-function onEmojiInput(val){
-  const ep = document.getElementById('fotoPreviewEmoji');
-  if(ep) ep.textContent = val || '🍽️';
-}
-
-let activeCat='Todos';
-function renderProducts(){
-
-  const listaProdutos = produtos || [];
-
-  const cats = [
-    'Todos',
-    ...new Set(
-      listaProdutos.map(p => p.categoria)
-    )
-  ];
-
-  document.getElementById('catChips').innerHTML =
-    cats.map(c => `
-      <div
-        class="cat-chip ${c===activeCat?'active':''}"
-        onclick="setCat('${c}')">
-        ${c}
-      </div>
-    `).join('');
-
-  const search =
-    (document.getElementById('searchProd')?.value || '')
-    .toLowerCase();
-
-  const filtered = listaProdutos.filter(p =>
-    (activeCat === 'Todos' ||
-     p.categoria === activeCat)
-    &&
-    (!search ||
-     p.nome.toLowerCase().includes(search))
-  );
-
-  document.getElementById('productsGrid').innerHTML =
-    filtered.map(p => {
-
-      const inCart =
-        cart.find(c => c.produto.id === p.id);
-
-      return `
-      <div
-        class="product-btn"
-        id="pbtn-${p.id}"
-        onclick="addToCart('${p.id}')">
-
-        <div class="p-icon">
-          ${prodIconHTML(p,'grid')}
-        </div>
-
-        <div class="p-name">
-          ${p.nome}
-        </div>
-
-        <div class="p-price">
-          ${fmt(p.preco)}
-        </div>
-
-        ${inCart ?
-          `<div class="p-qty-badge">${inCart.qty}</div>`
-          : ''
-        }
-
-      </div>`;
-    }).join('');
-
-}
-
-function setCat(cat){activeCat=cat;renderProducts();}
-
-function addToCart(prodId){
-
-  const p =
-    (produtos || []).find(
-      x => String(x.id) === String(prodId)
-    );
-
-  if(!p) return;
-
-  const idx =
-    cart.findIndex(
-      c => String(c.produto.id) === String(prodId)
-    );
-
-  if(idx >= 0){
-
-    cart[idx].qty++;
-
-  }else{
-
-    cart.push({
-      produto:p,
-      qty:1
-    });
-
-  }
-
-  const btn =
-    document.getElementById(
-      'pbtn-' + prodId
-    );
-
-  if(btn){
-
-    btn.classList.add('pulse');
-
-    setTimeout(() => {
-
-      btn.classList.remove('pulse');
-
-    },260);
-
-  }
-
-  renderCart();
-
+async function loginFuncionario(){
+  var funcId = getVal('selFunc');
+  var senha  = getVal('inFuncPass');
+  if(!funcId){ toast('Selecione um funcionário'); return; }
+  if(!senha){  toast('Digite a senha'); return; }
+  var f = funcionarios.find(function(x){ return String(x.id)===String(funcId) && String(x.senha)===String(senha); });
+  if(!f){ toast('❌ Senha incorreta'); return; }
+  currentUser = {id:f.id, nome:f.nome, usuario:f.usuario, perfil:f.perfil, role:'func'};
+  setEl('pdvUserBadge', '👤 '+f.nome);
+  showScreen('pdvScreen');
   renderProducts();
-
+  updateCaixaBanner();
 }
 
-function renderCart(){
-  const items=document.getElementById('cartItems');
-  if(cart.length===0){items.innerHTML='<div class="cart-empty">🛒<br>Carrinho vazio</div>';document.getElementById('cartTotal').textContent='R$ 0,00';return;}
-  items.innerHTML=cart.map((c,i)=>`
-    <div class="cart-item">
-      <span style="flex-shrink:0">${prodIconHTML(c.produto,'cart')}</span>
-      <span class="ci-name">${c.produto.nome}</span>
-      <div class="ci-qty-ctrl">
-        <button onclick="changeQty(${i},-1)">−</button>
-        <span>${c.qty}</span>
-        <button onclick="changeQty(${i},1)">+</button>
-      </div>
-      <span class="ci-price">${fmt(c.produto.preco*c.qty)}</span>
-    </div>`).join('');
-  document.getElementById('cartTotal').textContent=fmt(getCartTotal());
-}
-function changeQty(idx,delta){cart[idx].qty+=delta;if(cart[idx].qty<=0)cart.splice(idx,1);renderCart();renderProducts();}
-function clearCart(){cart=[];selectedPayMethod=null;selectedCliente=null;renderCart();renderProducts();}
-function getCartTotal(){return cart.reduce((s,c)=>s+c.produto.preco*c.qty,0);}
-
-// =====================================================
-// PAGAMENTO
-// =====================================================
-function labelPgto(m){return{dinheiro:'💵 Dinheiro',debito:'💳 Débito',credito:'💎 Crédito',pix:'⚡ Pix',fiado:'🪙 Crédito Cliente'}[m]||m;}
-function openPayment(){
-  if(cart.length===0){toast('Carrinho vazio');return;}
-  if(!caixaAtual){toast('⚠️ Abra o caixa antes de finalizar uma venda!',3500);return;}
-  selectedPayMethod=null;selectedCliente=null;
-  document.querySelectorAll('.pay-method').forEach(m=>m.classList.remove('selected'));
-  document.getElementById('trocoSection').classList.add('hidden');
-  document.getElementById('fiadoSection').classList.add('hidden');
-  document.getElementById('payTotal').textContent=fmt(getCartTotal());
-  document.getElementById('inRecebido').value='';
-  document.getElementById('trocoVal').textContent='R$ 0,00';
-  document.getElementById('searchCliente').value='';
-  document.getElementById('clienteSelecionado').classList.add('hidden');
-  showModal('paymentModal');
-}
-function selectPay(el,method){
-  selectedPayMethod=method;
-  document.querySelectorAll('.pay-method').forEach(m=>m.classList.remove('selected'));
-  el.classList.add('selected');
-  document.getElementById('trocoSection').classList.toggle('hidden',method!=='dinheiro');
-  document.getElementById('fiadoSection').classList.toggle('hidden',method!=='fiado');
-  if(method==='fiado'){selectedCliente=null;renderClienteList();}
-}
-function calcTroco(){
-  const total=getCartTotal();
-  const rec=parseFloat(document.getElementById('inRecebido').value)||0;
-  document.getElementById('trocoVal').textContent=fmt(Math.max(0,rec-total));
-}
-function renderClienteList(){
-
-  const search =
-    (document.getElementById('searchCliente')?.value || '')
-    .toLowerCase().trim();
-
-  const el =
-    document.getElementById('clienteListModal');
-
-  if(!el) return;
-
-  // Só exibe lista se houver pelo menos 1 caractere digitado
-  if(!search){
-    el.innerHTML = '';
-    return;
-  }
-
-  const listaClientes =
-    (clientes || []).filter(c => {
-      const nome     = (c.nome     || '').toLowerCase();
-      const email    = (c.email    || '').toLowerCase();
-      // telefone pode vir como número do Sheets — normalizar para string de dígitos
-      const telStr   = String(c.telefone || '').replace(/\D/g,'');
-      const searchTel= search.replace(/\D/g,'');
-      return nome.includes(search) ||
-             email.includes(search) ||
-             (searchTel && telStr.includes(searchTel));
-    });
-
-  el.innerHTML = listaClientes.map(c => {
-
-    const saldo =
-      Number(c.limite || 0) -
-      Number(c.usado || 0);
-
-    return `
-      <div
-        class="client-list-item ${selectedCliente?.id===c.id?'sel':''}"
-        onclick="selectCliente('${c.id}')">
-
-        <div>
-          <div style="font-weight:700;font-size:14px">
-            ${c.nome}
-          </div>
-
-          <div style="font-size:12px;color:var(--muted)">
-            ${c.telefone}
-          </div>
-        </div>
-
-        <div class="cli-credit ${
-          saldo < getCartTotal()
-          ? 'credit-over'
-          : 'credit-ok'
-        }">
-          ${fmt(saldo)}
-        </div>
-
-      </div>`;
-  }).join('')
-
-  || '<div style="color:var(--muted);font-size:13px;padding:10px">Nenhum cliente encontrado</div>';
-
-}
-
-function selectCliente(id){
-
-  const c = clientes.find(
-    x => String(x.id) === String(id)
-  );
-
-  if(!c) return;
-
-  selectedCliente = c;
-
-  document.getElementById('cliSelNome').textContent =
-    c.nome;
-
-  document.getElementById('cliSelLimite').textContent =
-    fmt(c.limite);
-
-  const saldo =
-    c.limite - c.usado;
-
-  const el =
-    document.getElementById('cliSelSaldo');
-
-  el.textContent =
-    fmt(saldo);
-
-  el.style.color =
-    saldo < getCartTotal()
-    ? 'var(--red)'
-    : 'var(--green)';
-
-  el.style.fontWeight =
-    '700';
-
-  document
-    .getElementById('clienteSelecionado')
-    .classList
-    .remove('hidden');
-
-  renderClienteList();
-
-}
-
-async function confirmarVenda(){
-
-  if(!selectedPayMethod){
-
-    toast('Selecione pagamento');
-
-    return;
-  }
-
-  const total = getCartTotal();
-
-  if(selectedPayMethod === 'fiado' && !selectedCliente){
-    toast('❌ Selecione um cliente para crédito');
-    return;
-  }
-
-  if(selectedPayMethod === 'fiado' && selectedCliente){
-    const saldo = Number(selectedCliente.limite||0) - Number(selectedCliente.usado||0);
-    if(saldo < total){
-      toast('❌ Saldo insuficiente: ' + fmt(saldo));
-      return;
-    }
-  }
-
-  const now = Date.now();
-
-  const venda = {
-    id:            uuid(),
-    data:          now,
-    hora:          timeOnly(now),
-    caixaId:       caixaAtual?.id || '',
-    clienteId:     selectedCliente?.id || '',
-    cliente:       selectedCliente?.nome || '',
-    clienteNome:   selectedCliente?.nome || '',
-    funcionario:   currentUser?.nome || '',
-    funcionarioId: currentUser?.id || '',
-    funcionarioNome: currentUser?.nome || '',
-    itens: cart.map(c=>({
-      id:    c.produto.id,
-      nome:  c.produto.nome,
-      preco: c.produto.preco,
-      qty:   c.qty
-    })),
-    quantidade: cart.reduce((s,i)=>s+i.qty, 0),
-    subtotal:   total,
-    desconto:   0,
-    total:      total,
-    pagamento:  selectedPayMethod
-  };
-
-  // Salva na API
-  await api('registrarVenda', venda);
-
-  // Salva localmente para dashboards/relatórios funcionarem
-  vendas.push(venda);
-  salvarVendasLocal();
-
-  // Baixa crédito do cliente se pagamento for fiado
-  if(selectedPayMethod === 'fiado' && selectedCliente){
-    const idx = clientes.findIndex(c => String(c.id) === String(selectedCliente.id));
-    if(idx >= 0){
-      const novoUsado = Number(clientes[idx].usado||0) + total;
-      clientes[idx].usado = novoUsado;
-      selectedCliente = clientes[idx];
-      // Atualiza na planilha (coluna "usado")
-      await api('baixarCredito', {
-        id:    clientes[idx].id,
-        usado: novoUsado
-      });
-      // Notifica se crédito ficou baixo
-      checkCreditoAposVenda(selectedCliente.id);
-    }
-  }
-
-  closeModal('paymentModal');
-  renderProducts();
-  cart = [];
-  selectedCliente = null;
-  selectedPayMethod = null;
-  renderCart();
-  toast('✅ Venda registrada!');
-}
-
-// =====================================================
-// ADMIN PANELS
-// =====================================================
-function refreshAdminPanels(){renderDashboard();updateCaixaStatusUI();renderProdutosTable();renderFuncTable();renderClientesTable();renderVendasTable();}
+// ── ADMIN NAVEGAÇÃO ───────────────────────────────────────────────────────
 function switchAdminPanel(name){
-  document.querySelectorAll('.admin-panel').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.admin-nav-item').forEach(n=>n.classList.remove('active'));
-  document.getElementById('panel-'+name).classList.add('active');
-  const names=['dashboard','caixa','produtos','funcionarios','clientes','vendas'];
-  const items=document.querySelectorAll('.admin-nav-item');
-  const idx=names.indexOf(name);if(idx>=0)items[idx].classList.add('active');
-  ({dashboard:renderDashboard,caixa:updateCaixaStatusUI,produtos:renderProdutosTable,funcionarios:renderFuncTable,clientes:renderClientesTable,vendas:renderVendasTable})[name]?.();
+  document.querySelectorAll('.admin-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.admin-nav-item').forEach(function(b){ b.classList.remove('active'); });
+  var panel = document.getElementById('panel-'+name);
+  if(panel) panel.classList.add('active');
+  var nav = document.querySelector('.admin-nav-item[onclick*="\''+name+'\'"]');
+  if(nav) nav.classList.add('active');
+  if(name==='dashboard')    renderDashboard();
+  if(name==='produtos')     renderProdutosTable();
+  if(name==='clientes')     renderClientesTable();
+  if(name==='funcionarios') renderFuncTable();
+  if(name==='vendas')       renderVendasTable();
+  if(name==='caixa')        renderCaixaTable();
 }
 
-function renderDashboard(){
-
-  const listaVendas = vendas || [];
-
-  const hoje = new Date();
-
-  hoje.setHours(0,0,0,0);
-
-  const vendasHoje = listaVendas.filter(v => {
-    const dataVenda = new Date(Number(v.data) || v.data);
-    return dataVenda >= hoje;
+// ── CARREGAR DADOS ────────────────────────────────────────────────────────
+async function carregarProdutos(){
+  var raw = await api('listarProdutos');
+  // Apps Script retorna array de arrays (linhas brutas): [id, codigo, nome, categoria, preco, ativo]
+  var rows = Array.isArray(raw) ? raw : [];
+  produtos = rows.slice(1).filter(function(r){ return r[2]; }).map(function(r){
+    return { id:String(r[0]||uid()), codigo:r[1]||'', nome:String(r[2]||''), categoria:String(r[3]||'Geral'), preco:Number(r[4]||0), ativo:r[5]||'Sim' };
   });
+  renderProdutosTable();
+  renderProducts();
+}
 
-  const totHoje = vendasHoje.reduce(
-    (s,v) => s + Number(v.total || 0),
-    0
-  );
-
-  const byM = {
-    dinheiro:0,
-    debito:0,
-    credito:0,
-    pix:0,
-    fiado:0
-  };
-
-  vendasHoje.forEach(v => {
-
-    if(byM[v.pagamento] !== undefined){
-
-      byM[v.pagamento] += Number(v.total || 0);
-
-    }
-
+async function carregarClientes(){
+  var raw = await api('listarClientes');
+  clientes = (Array.isArray(raw)?raw:[]).map(function(c){
+    return { id:String(c.id||''), nome:c.nome||'', telefone:String(c.telefone||''), email:c.email||'', limite:Number(c.limite||0), usado:Number(c.usado||0), alerta:Number(c.alerta||25) };
   });
+  renderClientesTable();
+}
 
-  document.getElementById('statsGrid').innerHTML = `
-    <div class="stat-card amber">
-      <div class="sc-label">💰 Total Hoje</div>
-      <div class="sc-value">${fmt(totHoje)}</div>
-    </div>
+async function carregarFuncionarios(){
+  var raw = await api('listarFuncionarios');
+  funcionarios = (Array.isArray(raw)?raw:[]).map(function(f){
+    return { id:String(f.id||''), nome:f.nome||'', usuario:f.usuario||'', senha:String(f.senha||''), perfil:f.perfil||'Funcionário' };
+  });
+  renderFuncTable();
+  refreshFuncSelect();
+}
 
-    <div class="stat-card green">
-      <div class="sc-label">💵 Dinheiro Hoje</div>
-      <div class="sc-value">${fmt(byM.dinheiro)}</div>
-    </div>
+async function carregarCaixas(){
+  var raw = await api('listarCaixas');
+  caixas = Array.isArray(raw) ? raw : [];
+  caixaAtual = caixas.find(function(c){ return c.status==='Aberto'; }) || null;
+  updateCaixaStatusUI();
+  updateCaixaBanner();
+}
 
-    <div class="stat-card blue">
-      <div class="sc-label">💳 Débito Hoje</div>
-      <div class="sc-value">${fmt(byM.debito)}</div>
-    </div>
+// ── FUNCIONÁRIOS ──────────────────────────────────────────────────────────
+function refreshFuncSelect(){
+  var sel = document.getElementById('selFunc');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">— Selecione —</option>' +
+    funcionarios.map(function(f){ return '<option value="'+f.id+'">'+f.nome+'</option>'; }).join('');
+}
 
-    <div class="stat-card purple">
-      <div class="sc-label">💎 Crédito Hoje</div>
-      <div class="sc-value">${fmt(byM.credito)}</div>
-    </div>
+function renderFuncTable(){
+  var tb = document.getElementById('funcTbody');
+  if(!tb) return;
+  tb.innerHTML = funcionarios.length ? funcionarios.map(function(f){
+    return '<tr><td>'+f.nome+'</td><td>'+f.perfil+'</td><td>'+
+      '<button class="btn btn-ghost btn-sm" onclick="editFunc(\''+f.id+'\')">✏️</button> '+
+      '<button class="btn btn-red btn-sm" onclick="excluirFunc(\''+f.id+'\')">🗑️</button></td></tr>';
+  }).join('') : '<tr><td colspan="3" style="color:var(--muted);text-align:center">Nenhum funcionário</td></tr>';
+}
 
-    <div class="stat-card amber">
-      <div class="sc-label">⚡ Pix Hoje</div>
-      <div class="sc-value">${fmt(byM.pix)}</div>
-    </div>
+function openFuncModal(){
+  setEl('funcModalTitle','Novo Funcionário');
+  setVal('funcId',''); setVal('funcNome',''); setVal('funcUsuario',''); setVal('funcSenha','');
+  showModal('funcModal');
+}
 
-    <div class="stat-card red">
-      <div class="sc-label">🪙 Crédito Cliente</div>
-      <div class="sc-value">${fmt(byM.fiado)}</div>
-    </div>
-  `;
+function editFunc(id){
+  var f = funcionarios.find(function(x){ return String(x.id)===String(id); });
+  if(!f) return;
+  setEl('funcModalTitle','Editar Funcionário');
+  setVal('funcId',f.id); setVal('funcNome',f.nome); setVal('funcUsuario',f.usuario); setVal('funcSenha',f.senha);
+  showModal('funcModal');
+}
 
-  document.getElementById('recentSalesTbody').innerHTML =
-    vendasHoje
-      .slice()
-      .reverse()
-      .slice(0,12)
-      .map(v => `
-        <tr>
-          <td>${timeOnly(Number(v.data)||v.data)}</td>
-          <td>${v.funcionario || '-'}</td>
-          <td style="font-weight:700;color:var(--amber)">
-            ${fmt(v.total)}
-          </td>
-          <td>${labelPgto(v.pagamento)}</td>
-        </tr>
-      `)
-      .join('')
+async function salvarFuncionario(){
+  var eid  = getVal('funcId');
+  var nome = getVal('funcNome').trim();
+  var user = getVal('funcUsuario').trim() || nome.toLowerCase().replace(/\s+/g,'');
+  var pass = getVal('funcSenha').trim();
+  if(!nome||!pass){ toast('Preencha nome e senha'); return; }
+  var f = {id: eid||uid(), nome:nome, usuario:user, senha:pass, perfil:'Funcionário'};
+  if(eid) await api('excluirFuncionario',{id:eid});
+  await api('salvarFuncionario', f);
+  await carregarFuncionarios();
+  closeModal('funcModal');
+  toast('✅ Funcionário salvo');
+}
 
-    || '<tr><td colspan="4" style="color:var(--muted);text-align:center">Nenhuma venda hoje</td></tr>';
+async function excluirFunc(id){
+  if(!confirm('Excluir funcionário?')) return;
+  await api('excluirFuncionario',{id:id});
+  await carregarFuncionarios();
+  toast('Removido');
+}
 
+// ── PRODUTOS ──────────────────────────────────────────────────────────────
+function prodIcon(p, size){
+  var ini = (p.nome||'?')[0].toUpperCase();
+  var cores = ['#f59e0b','#3b82f6','#10b981','#8b5cf6','#ef4444','#06b6d4'];
+  var cor = cores[(p.nome||'').charCodeAt(0) % cores.length];
+  var s = size==='lg' ? 'width:48px;height:48px;font-size:22px;border-radius:12px' : 'width:32px;height:32px;font-size:13px;border-radius:8px';
+  return '<div style="'+s+';background:'+cor+'22;border:2px solid '+cor+';display:inline-flex;align-items:center;justify-content:center;font-weight:800;color:'+cor+';flex-shrink:0">'+ini+'</div>';
 }
 
 function renderProdutosTable(){
-
-  document.getElementById('produtosTbody').innerHTML =
-  (produtos || []).map(p => `
-    <tr>
-      <td>${prodIconHTML(p,'thumb')}</td>
-      <td style="font-weight:600">${p.nome}</td>
-      <td><span class="badge badge-muted">${p.categoria}</span></td>
-      <td style="font-weight:700;color:var(--amber)">
-        ${fmt(p.preco)}
-      </td>
-      <td class="actions">
-        <button class="btn btn-ghost btn-sm"
-          onclick="editProduto('${p.id}')">✏️</button>
-
-        <button class="btn btn-red btn-sm"
-          onclick="deleteProduto('${p.id}')">🗑️</button>
-      </td>
-    </tr>
-  `).join('')
-
-  || '<tr><td colspan="5" style="color:var(--muted);text-align:center">Nenhum produto</td></tr>';
-
+  var tb = document.getElementById('produtosTbody');
+  if(!tb) return;
+  tb.innerHTML = produtos.length ? produtos.map(function(p){
+    return '<tr><td>'+prodIcon(p,'sm')+'</td><td>'+p.nome+'</td><td>'+p.categoria+'</td><td>'+fmt(p.preco)+'</td><td>'+
+      '<button class="btn btn-ghost btn-sm" onclick="editProduto(\''+p.id+'\')">✏️</button> '+
+      '<button class="btn btn-red btn-sm" onclick="excluirProduto(\''+p.id+'\')">🗑️</button></td></tr>';
+  }).join('') : '<tr><td colspan="5" style="color:var(--muted);text-align:center">Nenhum produto</td></tr>';
 }
+
+var activeCat = 'Todos';
+function renderProducts(){
+  var q = (getVal('searchProd')||'').toLowerCase();
+  var cats = ['Todos'];
+  produtos.forEach(function(p){ if(p.categoria && cats.indexOf(p.categoria)<0) cats.push(p.categoria); });
+  var catBar = document.getElementById('catChips');
+  if(catBar){
+    catBar.innerHTML = cats.map(function(c){
+      return '<button class="chip'+(c===activeCat?' chip-active':'')+'" onclick="filterCat(\''+c+'\')">'+c+'</button>';
+    }).join('');
+  }
+  var list = produtos.filter(function(p){
+    return (activeCat==='Todos'||p.categoria===activeCat) && (!q||p.nome.toLowerCase().includes(q));
+  });
+  var grid = document.getElementById('productsGrid');
+  if(!grid) return;
+  grid.innerHTML = list.length ? list.map(function(p){
+    return '<div class="prod-card" onclick="addToCart(\''+p.id+'\')">'+
+      prodIcon(p,'lg')+'<div class="prod-name">'+p.nome+'</div><div class="prod-price">'+fmt(p.preco)+'</div></div>';
+  }).join('') : '<p style="color:var(--muted);padding:24px;text-align:center">Nenhum produto</p>';
+}
+
+function filterCat(c){ activeCat=c; renderProducts(); }
 
 function openProdModal(){
-  document.getElementById('prodModalTitle').textContent='Novo Produto';
-  document.getElementById('prodId').value='';
-  document.getElementById('prodNome').value='';
-  document.getElementById('prodCat').value='';
-  document.getElementById('prodPreco').value='';
+  setEl('prodModalTitle','Novo Produto');
+  setVal('prodId',''); setVal('prodNome',''); setVal('prodCat',''); setVal('prodPreco','');
   showModal('prodModal');
 }
+
 function editProduto(id){
-  const p = (produtos || []).find(x => String(x.id) === String(id));
+  var p = produtos.find(function(x){ return String(x.id)===String(id); });
   if(!p) return;
-  document.getElementById('prodModalTitle').textContent = 'Editar Produto';
-  document.getElementById('prodId').value   = p.id;
-  document.getElementById('prodNome').value = p.nome;
-  document.getElementById('prodCat').value  = p.categoria;
-  document.getElementById('prodPreco').value= p.preco;
+  setEl('prodModalTitle','Editar Produto');
+  setVal('prodId',p.id); setVal('prodNome',p.nome); setVal('prodCat',p.categoria); setVal('prodPreco',p.preco);
   showModal('prodModal');
 }
 
 async function salvarProduto(){
-
-  const prodIdVal = document.getElementById('prodId').value;
-  const nomeProd = document.getElementById('prodNome').value.trim();
-  const catProd  = document.getElementById('prodCat').value.trim();
-  const precoProd= Number(document.getElementById('prodPreco').value);
-  if(!nomeProd){ toast('❌ Informe o nome do produto'); return; }
-  const produto = {
-    id:        prodIdVal || uuid(),
-    codigo:    '',
-    nome:      nomeProd,
-    categoria: catProd || 'Geral',
-    preco:     precoProd,
-    ativo:     'Sim'
-  };
-
-  // Se tem id existente (edição), usar editarProduto; senão salvarProduto
-  const acaoProd = prodIdVal ? 'editarProduto' : 'salvarProduto';
-  await api(acaoProd, produto);
-
+  var eid   = getVal('prodId');
+  var nome  = getVal('prodNome').trim();
+  var cat   = getVal('prodCat').trim() || 'Geral';
+  var preco = Number(getVal('prodPreco'));
+  if(!nome){ toast('Informe o nome'); return; }
+  var p = {id:eid||uid(), codigo:'', nome:nome, categoria:cat, preco:preco, ativo:'Sim'};
+  await api(eid ? 'editarProduto' : 'salvarProduto', p);
   await carregarProdutos();
-
   closeModal('prodModal');
-
-  toast('Produto salvo!');
+  toast('✅ Produto salvo');
 }
 
-async function deleteProduto(id){
+async function excluirProduto(id){
+  if(!confirm('Excluir produto?')) return;
+  await api('excluirProduto',{id:id});
+  await carregarProdutos();
+  toast('Removido');
+}
 
-  if(!confirm('Remover produto?')){
-    return;
+// ── CARRINHO ──────────────────────────────────────────────────────────────
+function clearCart(){ cart=[]; renderCart(); }
+
+function addToCart(id){
+  var p = produtos.find(function(x){ return String(x.id)===String(id); });
+  if(!p) return;
+  var item = cart.find(function(x){ return String(x.produto.id)===String(id); });
+  if(item) item.qty++;
+  else cart.push({produto:p, qty:1});
+  renderCart();
+}
+
+function changeQty(id, delta){
+  var idx = cart.findIndex(function(x){ return String(x.produto.id)===String(id); });
+  if(idx<0) return;
+  cart[idx].qty += delta;
+  if(cart[idx].qty<=0) cart.splice(idx,1);
+  renderCart();
+}
+
+function renderCart(){
+  var el = document.getElementById('cartItems');
+  var total = cart.reduce(function(s,i){ return s+i.produto.preco*i.qty; }, 0);
+  if(el){
+    el.innerHTML = cart.length ? cart.map(function(i){
+      return '<div class="cart-item">'+prodIcon(i.produto,'sm')+
+        '<div class="cart-item-info"><div class="cart-item-name">'+i.produto.nome+'</div>'+
+        '<div class="cart-item-price">'+fmt(i.produto.preco)+' × '+i.qty+' = '+fmt(i.produto.preco*i.qty)+'</div></div>'+
+        '<div class="cart-qty-ctrl">'+
+        '<button class="btn btn-ghost btn-sm" onclick="changeQty(\''+i.produto.id+'\',-1)">−</button>'+
+        '<span>'+i.qty+'</span>'+
+        '<button class="btn btn-amber btn-sm" onclick="changeQty(\''+i.produto.id+'\',1)">+</button>'+
+        '</div></div>';
+    }).join('') : '<p style="color:var(--muted);text-align:center;padding:24px">Carrinho vazio</p>';
   }
+  setEl('cartTotal', fmt(total));
+  var btn = document.getElementById('btnPagar');
+  if(btn) btn.disabled = cart.length===0;
+}
 
-  try{
+// ── CAIXA (PDV) ───────────────────────────────────────────────────────────
+function openCaixaModal(){
+  if(caixaAtual){ toast('Caixa já está aberto'); return; }
+  setVal('caixaInicial','');
+  showModal('caixaModal');
+}
 
-    await api('excluirProduto',{
-      id:id
-    });
-
-    await carregarProdutos();
-
-    renderProdutosTable();
-
-    renderProducts();
-
-    toast('✅ Produto removido');
-
-  }catch(err){
-
-    console.error(err);
-
-    toast('❌ Erro ao remover produto');
-
+function updateCaixaBanner(){
+  var warn = document.getElementById('caixaWarnBanner');
+  var lbl  = document.getElementById('btnCaixaLabel');
+  if(caixaAtual){
+    if(warn) warn.classList.add('hidden');
+    if(lbl)  lbl.textContent = '🟢 Caixa Aberto';
+  } else {
+    if(warn) warn.classList.remove('hidden');
+    if(lbl)  lbl.textContent = '🔴 Abrir Caixa';
   }
-
 }
 
-function renderFuncTable(){
-
-  document.getElementById('funcTbody').innerHTML =
-
-  (funcionarios || []).map(f => `
-
-    <tr>
-
-      <td style="font-weight:600">
-        ${f.nome}
-      </td>
-
-      <td>
-        <span class="badge badge-blue">
-          ${f.perfil || 'Funcionário'}
-        </span>
-      </td>
-
-      <td class="actions">
-
-        <button
-          class="btn btn-ghost btn-sm"
-          onclick="editFunc('${f.id}')">
-
-          ✏️
-
-        </button>
-
-        <button
-          class="btn btn-red btn-sm"
-          onclick="deleteFunc('${f.id}')">
-
-          🗑️
-
-        </button>
-
-      </td>
-
-    </tr>
-
-  `).join('')
-
-  ||
-
-  `<tr>
-     <td colspan="3"
-         style="color:var(--muted);text-align:center">
-         Nenhum funcionário
-     </td>
-   </tr>`;
-
-}
-function openFuncModal(){document.getElementById('funcModalTitle').textContent='Novo Funcionário';document.getElementById('funcId').value='';document.getElementById('funcNome').value='';document.getElementById('funcUsuario').value='';document.getElementById('funcSenha').value='';showModal('funcModal');}
-function openClienteModal(){document.getElementById('clienteModalTitle').textContent='Novo Cliente';document.getElementById('clienteId').value='';document.getElementById('clienteNome').value='';document.getElementById('clienteTel').value='';document.getElementById('clienteEmail').value='';document.getElementById('clienteLimite').value='';document.getElementById('clienteAlerta').value='25';showModal('clienteModal');}
-
-function editFunc(id){
-
-  const f =
-    funcionarios.find(
-      x => String(x.id) === String(id)
-    );
-
-  if(!f) return;
-
-  document.getElementById(
-    'funcModalTitle'
-  ).textContent =
-    'Editar Funcionário';
-
-  document.getElementById(
-    'funcId'
-  ).value = f.id;
-
-  document.getElementById(
-    'funcNome'
-  ).value = f.nome;
-
-  document.getElementById(
-    'funcUsuario'
-  ).value = f.usuario || '';
-
-  document.getElementById(
-    'funcSenha'
-  ).value = f.senha;
-
-  showModal('funcModal');
-
-}
-
-async function salvarFuncionario(){
-
-  const existingId = document.getElementById('funcId').value;
-
-  const nomeVal    = document.getElementById('funcNome').value.trim();
-  const usuarioVal = document.getElementById('funcUsuario').value.trim() || nomeVal.toLowerCase().replace(/\s+/g,'');
-  const senhaVal   = document.getElementById('funcSenha').value;
-  const funcionario = {
-    id:      existingId || uuid(),
-    nome:    nomeVal,
-    usuario: usuarioVal,
-    senha:   senhaVal,
-    perfil:  'Funcionário'
+async function confirmarAbrirCaixa(){
+  var valor = Number(getVal('caixaInicial')||0);
+  var c = {
+    id:   uid(),
+    data: new Date().toLocaleDateString('pt-BR'),
+    hora: new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),
+    valorInicial: valor,
+    operador: currentUser ? currentUser.nome : 'Admin'
   };
-
-  if(existingId){
-    // Apps Script não tem editarFuncionario: exclui o antigo e salva novo
-    await api('excluirFuncionario', {id: existingId});
-  }
-  await api('salvarFuncionario', funcionario);
-
-  await carregarFuncionarios();
-
-  closeModal('funcModal');
-
-  toast('Funcionário salvo');
+  await api('abrirCaixa', c);
+  await carregarCaixas();
+  closeModal('caixaModal');
+  toast('✅ Caixa aberto');
 }
 
-async function deleteFunc(id){
-
-  if(!confirm('Remover funcionário?')){
-    return;
-  }
-
-  try{
-
-    await api('excluirFuncionario',{
-      id:id
-    });
-
-    await carregarFuncionarios();
-
-    refreshFuncSelect();
-
-    renderFuncTable();
-
-    toast('✅ Funcionário removido');
-
-  }catch(err){
-
-    console.error(err);
-
-    toast('❌ Erro ao remover funcionário');
-
-  }
-
+// ── CAIXA (ADMIN) ─────────────────────────────────────────────────────────
+function abrirCaixa(){
+  setVal('caixaInicial','');
+  showModal('caixaModal');
 }
 
+function fecharCaixa(){
+  if(!caixaAtual){ toast('Nenhum caixa aberto'); return; }
+  var vc = vendas.filter(function(v){ return String(v.caixaId)===String(caixaAtual.id); });
+  var totalV = vc.reduce(function(s,v){ return s+Number(v.total||0); }, 0);
+  var resumo = document.getElementById('fechamentoResumo');
+  if(resumo) resumo.innerHTML =
+    '<div style="padding:14px;background:var(--surface2);border-radius:10px;margin-bottom:12px">'+
+    '<div>Abertura: <b>'+caixaAtual.abertura+'</b></div>'+
+    '<div>Vendas: <b>'+vc.length+'</b></div>'+
+    '<div>Total vendas: <b>'+fmt(totalV)+'</b></div>'+
+    '<div>Valor inicial: <b>'+fmt(caixaAtual.valorInicial)+'</b></div>'+
+    '<div style="font-size:18px;font-weight:800;color:var(--green);margin-top:8px">Total final: '+fmt(Number(caixaAtual.valorInicial)+totalV)+'</div>'+
+    '</div>';
+  showModal('fecharCaixaModal');
+}
+
+async function confirmarFecharEnviarPDF(){
+  var vc = vendas.filter(function(v){ return String(v.caixaId)===String(caixaAtual.id); });
+  var totalV = vc.reduce(function(s,v){ return s+Number(v.total||0); }, 0);
+  await api('fecharCaixa',{
+    id:             caixaAtual.id,
+    horaFechamento: new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}),
+    valorFinal:     (Number(caixaAtual.valorInicial||0)+totalV).toFixed(2)
+  });
+  closeModal('fecharCaixaModal');
+  await carregarCaixas();
+  toast('✅ Caixa fechado');
+  exportarRelatorioPDF(vc, totalV);
+}
+
+function updateCaixaStatusUI(){
+  var dot   = document.getElementById('caixaDot');
+  var label = document.getElementById('caixaStatusLabel');
+  var sub   = document.getElementById('caixaStatusSub');
+  if(caixaAtual){
+    if(dot)   { dot.classList.remove('closed'); dot.classList.add('open'); }
+    if(label) label.textContent = 'Caixa Aberto';
+    if(sub)   sub.textContent   = 'Aberto em '+caixaAtual.abertura;
+  } else {
+    if(dot)   { dot.classList.add('closed'); dot.classList.remove('open'); }
+    if(label) label.textContent = 'Caixa Fechado';
+    if(sub)   sub.textContent   = 'Nenhum caixa aberto';
+  }
+  renderCaixaTable();
+}
+
+function renderCaixaTable(){
+  var tb = document.getElementById('caixaTbody');
+  if(!tb) return;
+  tb.innerHTML = caixas.length ? [...caixas].reverse().map(function(c){
+    var vc = vendas.filter(function(v){ return String(v.caixaId)===String(c.id); });
+    var totalV = vc.reduce(function(s,v){ return s+Number(v.total||0); }, 0);
+    return '<tr>'+
+      '<td>'+String(c.abertura||'').split(' ')[0]+'</td>'+
+      '<td>'+String(c.abertura||'').split(' ')[1]+'</td>'+
+      '<td>'+(c.fechamento||'—')+'</td>'+
+      '<td>'+vc.length+'</td>'+
+      '<td>'+fmt(totalV)+'</td>'+
+      '<td>'+(c.status==='Aberto'?'<span style="color:var(--green)">🟢 Aberto</span>':'<span style="color:var(--muted)">🔴 Fechado</span>')+'</td>'+
+      '<td></td></tr>';
+  }).join('') : '<tr><td colspan="7" style="color:var(--muted);text-align:center">Nenhum caixa</td></tr>';
+}
+
+// ── PAGAMENTO / VENDA ─────────────────────────────────────────────────────
+function openPayment(){
+  if(!cart.length){ toast('Adicione produtos'); return; }
+  selectedCliente = null; selectedPayMethod = null;
+  setVal('searchCliente','');
+  var cl = document.getElementById('clienteListModal'); if(cl) cl.innerHTML='';
+  var cs = document.getElementById('clienteSelecionado'); if(cs) cs.classList.add('hidden');
+  document.querySelectorAll('.pay-method').forEach(function(b){ b.classList.remove('active'); });
+  document.getElementById('trocoSection').classList.add('hidden');
+  document.getElementById('fiadoSection').classList.add('hidden');
+  setEl('payTotal', fmt(cart.reduce(function(s,i){ return s+i.produto.preco*i.qty; },0)));
+  showModal('paymentModal');
+}
+
+function selectPay(el, method){
+  selectedPayMethod = method;
+  document.querySelectorAll('.pay-method').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  document.getElementById('trocoSection').classList.toggle('hidden', method!=='dinheiro');
+  document.getElementById('fiadoSection').classList.toggle('hidden', method!=='fiado');
+}
+
+function calcTroco(){
+  var total = cart.reduce(function(s,i){ return s+i.produto.preco*i.qty; },0);
+  var rec   = Number(getVal('inRecebido')||0);
+  setEl('trocoVal', fmt(Math.max(0, rec-total)));
+}
+
+function renderClienteList(){
+  var search = (getVal('searchCliente')||'').trim().toLowerCase();
+  var el = document.getElementById('clienteListModal');
+  if(!el) return;
+  if(!search){ el.innerHTML=''; return; }
+  var tel = search.replace(/\D/g,'');
+  var found = clientes.filter(function(c){
+    return c.nome.toLowerCase().includes(search) ||
+           (c.email||'').toLowerCase().includes(search) ||
+           (tel && String(c.telefone||'').replace(/\D/g,'').includes(tel));
+  });
+  el.innerHTML = found.length ? found.map(function(c){
+    var saldo = Number(c.limite||0)-Number(c.usado||0);
+    var cor = saldo<=Number(c.alerta||25)?'var(--red)':'var(--green)';
+    return '<div class="cliente-item" onclick="selecionarCliente(\''+c.id+'\')">'+
+      '<div><b>'+c.nome+'</b><br><span style="font-size:12px;color:var(--muted)">'+c.telefone+'</span></div>'+
+      '<div style="color:'+cor+';font-weight:700">'+fmt(saldo)+'</div></div>';
+  }).join('') : '<p style="color:var(--muted);padding:12px">Nenhum encontrado</p>';
+}
+
+function selecionarCliente(id){
+  selectedCliente = clientes.find(function(c){ return String(c.id)===String(id); });
+  if(!selectedCliente) return;
+  var saldo = Number(selectedCliente.limite||0)-Number(selectedCliente.usado||0);
+  setEl('cliSelNome',  selectedCliente.nome);
+  setEl('cliSelLimite', fmt(selectedCliente.limite));
+  setEl('cliSelSaldo',  fmt(saldo));
+  var cs = document.getElementById('clienteSelecionado');
+  if(cs) cs.classList.remove('hidden');
+  var cl = document.getElementById('clienteListModal'); if(cl) cl.innerHTML='';
+  setVal('searchCliente','');
+}
+
+async function confirmarVenda(){
+  if(!cart.length){ toast('Carrinho vazio'); return; }
+  if(!selectedPayMethod){ toast('Selecione o pagamento'); return; }
+  if(selectedPayMethod==='fiado' && !selectedCliente){ toast('Selecione um cliente'); return; }
+  if(!caixaAtual){ toast('❌ Abra o caixa primeiro'); return; }
+  var total = cart.reduce(function(s,i){ return s+i.produto.preco*i.qty; },0);
+  if(selectedPayMethod==='fiado'){
+    var saldo = Number(selectedCliente.limite||0)-Number(selectedCliente.usado||0);
+    if(saldo < total){ toast('❌ Saldo insuficiente: '+fmt(saldo)); return; }
+  }
+  var now = Date.now();
+  var venda = {
+    id:              uid(),
+    data:            now,
+    hora:            timeOnly(now),
+    caixaId:         String(caixaAtual.id),
+    clienteId:       selectedCliente ? String(selectedCliente.id) : '',
+    clienteNome:     selectedCliente ? selectedCliente.nome : '',
+    funcionarioId:   currentUser ? String(currentUser.id) : '',
+    funcionarioNome: currentUser ? currentUser.nome : '',
+    itens: cart.map(function(c){ return {id:c.produto.id, nome:c.produto.nome, preco:c.produto.preco, qty:c.qty}; }),
+    quantidade: cart.reduce(function(s,i){ return s+i.qty; },0),
+    subtotal: total, desconto:0, total:total,
+    pagamento: selectedPayMethod
+  };
+  await api('registrarVenda', venda);
+  vendas.push(venda);
+  localStorage.setItem('cantina_vendas', JSON.stringify(vendas));
+  if(selectedPayMethod==='fiado' && selectedCliente){
+    var idx = clientes.findIndex(function(c){ return String(c.id)===String(selectedCliente.id); });
+    if(idx>=0){
+      clientes[idx].usado = Number(clientes[idx].usado||0)+total;
+      await api('baixarCredito', {id:clientes[idx].id, usado:clientes[idx].usado});
+    }
+  }
+  closeModal('paymentModal');
+  cart=[]; selectedCliente=null; selectedPayMethod=null;
+  renderCart(); renderProducts();
+  toast('✅ Venda registrada!');
+}
+
+// ── CLIENTES ──────────────────────────────────────────────────────────────
 function renderClientesTable(){
+  var tb = document.getElementById('clientesTbody');
+  if(!tb) return;
+  tb.innerHTML = clientes.length ? clientes.map(function(c){
+    var saldo = Number(c.limite||0)-Number(c.usado||0);
+    var cor   = saldo<=Number(c.alerta||25)?'var(--red)':'var(--green)';
+    return '<tr><td>'+c.nome+'</td><td>'+c.telefone+'</td><td>'+c.email+'</td>'+
+      '<td>'+fmt(c.limite)+'</td><td>'+fmt(c.usado)+'</td>'+
+      '<td style="color:'+cor+';font-weight:700">'+fmt(saldo)+'</td>'+
+      '<td>'+fmt(c.alerta)+'</td>'+
+      '<td><button class="btn btn-ghost btn-sm" onclick="editCliente(\''+c.id+'\')">✏️</button> '+
+      '<button class="btn btn-red btn-sm" onclick="excluirCliente(\''+c.id+'\')">🗑️</button></td></tr>';
+  }).join('') : '<tr><td colspan="8" style="color:var(--muted);text-align:center">Nenhum cliente</td></tr>';
+}
 
-  const listaClientes = clientes || [];
-
-  document.getElementById('clientesTbody').innerHTML =
-    listaClientes.map(c => {
-
-      const saldo =
-        Number(c.limite || 0) -
-        Number(c.usado || 0);
-
-      const pct =
-        Number(c.limite || 0) > 0
-        ? Number(c.usado || 0) / Number(c.limite || 0)
-        : 0;
-
-      const cls =
-        pct >= 1
-        ? 'credit-over'
-        : pct >= 0.7
-        ? 'credit-warn'
-        : 'credit-ok';
-
-      const baixo =
-        saldo <= Number(c.alerta || 25)
-        && saldo >= 0;
-
-      return `
-      <tr>
-        <td style="font-weight:600">${c.nome}</td>
-        <td>${c.telefone || ''}</td>
-        <td>${c.email || '-'}</td>
-
-        <td>${fmt(c.limite || 0)}</td>
-
-        <td class="${cls}">
-          ${fmt(c.usado || 0)}
-        </td>
-
-        <td class="${cls}" style="font-weight:700">
-          ${fmt(saldo)}
-        </td>
-
-        <td>
-          ${
-            baixo
-            ? '<span class="credit-low-badge">⚠️ Baixo</span>'
-            : '-'
-          }
-        </td>
-
-        <td class="actions">
-
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick="editCliente('${c.id}')"
-            title="Editar">
-            ✏️
-          </button>
-
-          <button
-            class="btn btn-blue btn-sm"
-            onclick="openNotifyModal('${c.id}')"
-            title="Notificar">
-            🔔
-          </button>
-
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick="resetCredito('${c.id}')"
-            title="Zerar uso">
-            ↩️
-          </button>
-
-          <button
-            class="btn btn-red btn-sm"
-            onclick="deleteCliente('${c.id}')"
-            title="Remover">
-            🗑️
-          </button>
-
-        </td>
-
-      </tr>`;
-    }).join('')
-
-    || '<tr><td colspan="8" style="color:var(--muted);text-align:center">Nenhum cliente</td></tr>';
-
+function openClienteModal(){
+  setEl('clienteModalTitle','Novo Cliente');
+  setVal('clienteId',''); setVal('clienteNome',''); setVal('clienteTel','');
+  setVal('clienteEmail',''); setVal('clienteLimite',''); setVal('clienteAlerta','25');
+  showModal('clienteModal');
 }
 
 function editCliente(id){
-
-  const c = clientes.find(
-    x => String(x.id) === String(id)
-  );
-
+  var c = clientes.find(function(x){ return String(x.id)===String(id); });
   if(!c) return;
-
-  document.getElementById('clienteModalTitle').textContent =
-    'Editar Cliente';
-
-  document.getElementById('clienteId').value =
-    c.id;
-
-  document.getElementById('clienteNome').value =
-    c.nome;
-
-  document.getElementById('clienteTel').value =
-    c.telefone;
-
-  document.getElementById('clienteEmail').value =
-    c.email || '';
-
-  document.getElementById('clienteLimite').value =
-    c.limite;
-
-  document.getElementById('clienteAlerta').value =
-    c.alerta || 25;
-
+  setEl('clienteModalTitle','Editar Cliente');
+  setVal('clienteId',c.id); setVal('clienteNome',c.nome); setVal('clienteTel',c.telefone);
+  setVal('clienteEmail',c.email); setVal('clienteLimite',c.limite); setVal('clienteAlerta',c.alerta);
   showModal('clienteModal');
-
 }
 
 async function salvarCliente(){
-
-  const existingId = document.getElementById('clienteId').value;
-
-  const limite = Number(document.getElementById('clienteLimite').value || 0);
-  const alerta = Number(document.getElementById('clienteAlerta').value || 25);
-  const cliente = {
-    id:       existingId || uuid(),
-    nome:     document.getElementById('clienteNome').value.trim(),
-    telefone: document.getElementById('clienteTel').value.trim(),
-    email:    document.getElementById('clienteEmail').value.trim(),
-    limite:   limite,
-    alerta:   alerta
-  };
-
-  // Se tem id existente (edição), usar editarCliente; senão salvarCliente
-  const acaoCli = existingId ? 'editarCliente' : 'salvarCliente';
-  await api(acaoCli, cliente);
-
+  var eid    = getVal('clienteId');
+  var nome   = getVal('clienteNome').trim();
+  var tel    = getVal('clienteTel').trim();
+  var email  = getVal('clienteEmail').trim();
+  var limite = Number(getVal('clienteLimite')||0);
+  var alerta = Number(getVal('clienteAlerta')||25);
+  if(!nome){ toast('Informe o nome'); return; }
+  var c = {id:eid||uid(), nome:nome, telefone:tel, email:email, limite:limite, alerta:alerta};
+  await api(eid ? 'editarCliente' : 'salvarCliente', c);
   await carregarClientes();
-
   closeModal('clienteModal');
-
-  toast('Cliente salvo');
+  toast('✅ Cliente salvo');
 }
 
-async function deleteCliente(id){
-
-  if(!confirm('Remover cliente?')){
-    return;
-  }
-
-  try{
-
-    await api(
-      'excluirCliente',
-      {
-        id:id
-      }
-    );
-
-    await carregarClientes();
-
-    renderClientesTable();
-
-    toast('✅ Cliente removido');
-
-  }catch(err){
-
-    console.error(err);
-
-    toast('❌ Erro ao remover cliente');
-
-  }
-
+async function excluirCliente(id){
+  if(!confirm('Excluir cliente?')) return;
+  await api('excluirCliente',{id:id});
+  await carregarClientes();
+  toast('Removido');
 }
 
-function resetCredito(id){
-
-  if(!confirm('Zerar crédito usado?'))
-    return;
-
-  const idx =
-    clientes.findIndex(
-      c => String(c.id) === String(id)
-    );
-
-  if(idx >= 0){
-
-    clientes[idx].usado = 0;
-
-    if(
-      selectedCliente &&
-      String(selectedCliente.id) === String(id)
-    ){
-      selectedCliente = clientes[idx];
-    }
-
-  }
-
-  renderClientesTable();
-
-  renderClienteList();
-
-  toast('✅ Crédito zerado');
-
+// ── DASHBOARD ─────────────────────────────────────────────────────────────
+function renderDashboard(){
+  var hoje = new Date(); hoje.setHours(0,0,0,0);
+  var vh = vendas.filter(function(v){ return new Date(Number(v.data))>=hoje; });
+  var total = vh.reduce(function(s,v){ return s+Number(v.total||0); },0);
+  var sg = document.getElementById('statsGrid');
+  if(sg) sg.innerHTML =
+    stat('💰','Total Hoje', fmt(total),'var(--amber)')+
+    stat('🛒','Vendas',     vh.length,'var(--blue)')+
+    stat('📊','Ticket Médio', vh.length ? fmt(total/vh.length) : fmt(0),'var(--purple)')+
+    stat('⚠️','Alertas',    clientes.filter(function(c){ return Number(c.limite||0)-Number(c.usado||0)<=Number(c.alerta||25); }).length,'var(--red)');
+  var tb = document.getElementById('recentSalesTbody');
+  if(tb) tb.innerHTML = vh.slice(-5).reverse().map(function(v){
+    return '<tr><td>'+timeOnly(Number(v.data))+'</td><td>'+(v.funcionarioNome||'—')+'</td><td>'+fmt(v.total)+'</td><td>'+v.pagamento+'</td></tr>';
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted);text-align:center">Sem vendas hoje</td></tr>';
 }
 
-function openNotifyModal(id){
-
-  const c =
-    (clientes || []).find(
-      x => String(x.id) === String(id)
-    );
-
-  if(!c) return;
-
-  notifyTarget = c;
-
-  const saldo =
-    Number(c.limite || 0) -
-    Number(c.usado || 0);
-
-  document.getElementById('notifyClienteInfo').innerHTML = `
-    <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:4px">
-
-      <div style="font-weight:700;font-size:15px">
-        ${c.nome}
-      </div>
-
-      <div style="font-size:13px;color:var(--muted)">
-
-        Saldo:
-
-        <b style="color:${
-          saldo <= Number(c.alerta || 25)
-          ? 'var(--red)'
-          : 'var(--green)'
-        }">
-
-          ${fmt(saldo)}
-
-        </b>
-
-        |
-
-        Limite: ${fmt(c.limite || 0)}
-
-      </div>
-
-    </div>
-  `;
-
-  showModal('notifyModal');
-
+function stat(icon, label, val, cor){
+  return '<div class="stat-card"><div class="stat-icon" style="background:'+cor+'22;color:'+cor+'">'+icon+'</div>'+
+    '<div class="stat-label">'+label+'</div><div class="stat-value">'+val+'</div></div>';
 }
 
+// ── RELATÓRIO VENDAS ──────────────────────────────────────────────────────
 function renderVendasTable(){
-
-  document.getElementById('vendasTbody').innerHTML =
-
-    (vendas || [])
-      .slice()
-      .reverse()
-      .map(v => `
-
-        <tr>
-
-          <td>${dateStr(Number(v.data)||v.data)}</td>
-
-          <td>${v.funcionario || '-'}</td>
-
-          <td>${v.cliente || '-'}</td>
-
-          <td style="font-size:12px">
-            ${(v.itens || [])
-              .map(i => i.qty + 'x ' + i.nome)
-              .join(', ')}
-          </td>
-
-          <td style="font-weight:700;color:var(--amber)">
-            ${fmt(v.total || 0)}
-          </td>
-
-          <td>
-            ${labelPgto(v.pagamento)}
-          </td>
-
-        </tr>
-
-      `)
-      .join('')
-
-    || '<tr><td colspan="6" style="color:var(--muted);text-align:center">Nenhuma venda</td></tr>';
-
+  var tb = document.getElementById('vendasTbody');
+  if(!tb) return;
+  tb.innerHTML = vendas.length ? [...vendas].reverse().map(function(v){
+    return '<tr><td>'+dateOnly(Number(v.data))+' '+timeOnly(Number(v.data))+'</td>'+
+      '<td>'+(v.funcionarioNome||'—')+'</td><td>'+(v.clienteNome||'—')+'</td>'+
+      '<td>'+v.quantidade+'</td><td>'+fmt(v.total)+'</td><td>'+v.pagamento+'</td></tr>';
+  }).join('') : '<tr><td colspan="6" style="color:var(--muted);text-align:center">Nenhuma venda</td></tr>';
 }
 
-// =====================================================
-// PDF
-// =====================================================
-function buildPDFRelatorio(doc,caixa){
-
-  const vendasCaixa = (vendas || []).filter(
-    v => String(v.caixaId) === String(caixa.id)
-  );
-
-  const totalGeral = vendasCaixa.reduce(
-    (s,v) => s + Number(v.total || 0),
-    0
-  );
-
-  const byM = {
-    dinheiro:0,
-    debito:0,
-    credito:0,
-    pix:0,
-    fiado:0
-  };
-
-  vendasCaixa.forEach(v => {
-
-    if(byM[v.pagamento] !== undefined){
-
-      byM[v.pagamento] += Number(v.total || 0);
-
-    }
-
-  });
-
-  // Header
-  doc.setFillColor(245,158,11);
-  doc.rect(0,0,210,28,'F');
-
-  doc.setTextColor(15,23,42);
-  doc.setFontSize(18);
-  doc.setFont('helvetica','bold');
-
-  doc.text(
-    'CantinaApp — Relatório de Caixa',
-    14,
-    17
-  );
-
-  doc.setFontSize(9);
-  doc.setTextColor(80,60,0);
-
-  doc.text(
-    'Gerado em: ' + dateStr(Date.now()),
-    14,
-    24
-  );
-
-  // Dados do caixa
-  doc.setTextColor(30,41,59);
-  doc.setFontSize(10);
-  doc.setFont('helvetica','normal');
-
-  doc.text(
-    `Abertura: ${dateStr(caixa.abertura)}`,
-    14,
-    36
-  );
-
-  doc.text(
-    `Fechamento: ${
-      caixa.fechamento
-      ? dateStr(caixa.fechamento)
-      : dateStr(Date.now())
-    }`,
-    14,
-    42
-  );
-
-  doc.text(
-    `Responsável: ${caixa.funcionario}`,
-    14,
-    48
-  );
-
-  doc.text(
-    `Valor Inicial: ${fmt(caixa.valorInicial)}`,
-    14,
-    54
-  );
-
-  // Resumo
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(11);
-  doc.setTextColor(15,23,42);
-
-  doc.text(
-    'Resumo por Forma de Pagamento',
-    14,
-    64
-  );
-
-  doc.autoTable({
-    startY:68,
-
-    head:[
-      ['Forma de Pagamento','Total','%']
-    ],
-
-    body:[
-
-      [
-        '💵 Dinheiro',
-        fmt(byM.dinheiro),
-        totalGeral > 0
-          ? ((byM.dinheiro/totalGeral)*100).toFixed(1)+'%'
-          : '0%'
-      ],
-
-      [
-        '💳 Débito',
-        fmt(byM.debito),
-        totalGeral > 0
-          ? ((byM.debito/totalGeral)*100).toFixed(1)+'%'
-          : '0%'
-      ],
-
-      [
-        '💎 Crédito',
-        fmt(byM.credito),
-        totalGeral > 0
-          ? ((byM.credito/totalGeral)*100).toFixed(1)+'%'
-          : '0%'
-      ],
-
-      [
-        '⚡ Pix',
-        fmt(byM.pix),
-        totalGeral > 0
-          ? ((byM.pix/totalGeral)*100).toFixed(1)+'%'
-          : '0%'
-      ],
-
-      [
-        '🪙 Crédito Cliente',
-        fmt(byM.fiado),
-        totalGeral > 0
-          ? ((byM.fiado/totalGeral)*100).toFixed(1)+'%'
-          : '0%'
-      ]
-
-    ],
-
-    foot:[
-      [
-        'TOTAL GERAL',
-        fmt(totalGeral),
-        '100%'
-      ]
-    ],
-
-    theme:'grid',
-
-    headStyles:{
-      fillColor:[30,41,59],
-      textColor:[241,245,249],
-      fontStyle:'bold'
-    },
-
-    footStyles:{
-      fillColor:[245,158,11],
-      textColor:[15,23,42],
-      fontStyle:'bold'
-    },
-
-    styles:{
-      fontSize:10
-    }
-
-  });
-
-  // Vendas
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(11);
-  doc.setTextColor(15,23,42);
-
-  doc.text(
-    'Detalhe das Vendas (' +
-    vendasCaixa.length +
-    ')',
-    14,
-    doc.lastAutoTable.finalY + 12
-  );
-
-  doc.autoTable({
-
-    startY:
-      doc.lastAutoTable.finalY + 16,
-
-    head:[
-      [
-        'Hora',
-        'Funcionário',
-        'Cliente',
-        'Itens',
-        'Total',
-        'Pagamento'
-      ]
-    ],
-
-    body:vendasCaixa.map(v => [
-
-      timeOnly(v.data),
-
-      v.funcionario || '-',
-
-      v.cliente || '-',
-
-      (v.itens || [])
-        .map(i => i.qty + 'x ' + i.nome)
-        .join(', '),
-
-      fmt(v.total || 0),
-
-      labelPgto(v.pagamento)
-
-    ]),
-
-    theme:'striped',
-
-    headStyles:{
-      fillColor:[30,41,59],
-      textColor:[241,245,249]
-    },
-
-    alternateRowStyles:{
-      fillColor:[248,250,252]
-    },
-
-    styles:{
-      fontSize:8
-    }
-
-  });
-
-  return {
-    doc,
-    totalGeral,
-    byM,
-    vendas:vendasCaixa
-  };
-
-}
-
-function gerarRelatorioFechamentoPDF(caixa, enviarWhatsApp=false){
-
-  const { jsPDF } = jspdf;
-
-  const doc = new jsPDF();
-
-  const { totalGeral } =
-    buildPDFRelatorio(doc, caixa);
-
-  const filename =
-    `caixa_${dateOnly(caixa.abertura).replace(/\//g,'-')}.pdf`;
-
-  if(enviarWhatsApp){
-
-    const vendasCaixa =
-      (vendas || []).filter(
-        v => String(v.caixaId) === String(caixa.id)
-      );
-
-    const totalDinheiro =
-      vendasCaixa
-        .filter(v => v.pagamento === 'dinheiro')
-        .reduce((s,v) => s + Number(v.total || 0), 0);
-
-    const totalDebito =
-      vendasCaixa
-        .filter(v => v.pagamento === 'debito')
-        .reduce((s,v) => s + Number(v.total || 0), 0);
-
-    const totalCredito =
-      vendasCaixa
-        .filter(v => v.pagamento === 'credito')
-        .reduce((s,v) => s + Number(v.total || 0), 0);
-
-    const totalPix =
-      vendasCaixa
-        .filter(v => v.pagamento === 'pix')
-        .reduce((s,v) => s + Number(v.total || 0), 0);
-
-    const totalFiado =
-      vendasCaixa
-        .filter(v => v.pagamento === 'fiado')
-        .reduce((s,v) => s + Number(v.total || 0), 0);
-
-    const pdfBlob =
-      doc.output('blob');
-
-    URL.createObjectURL(pdfBlob);
-
-    doc.save(filename);
-
-    const msg =
-      `🍽️ *CantinaApp — Fechamento de Caixa*\n` +
-      `📅 Data: ${dateOnly(caixa.abertura)}\n` +
-      `🕐 Abertura: ${dateStr(caixa.abertura)}\n` +
-      `🕐 Fechamento: ${dateStr(Date.now())}\n` +
-      `👤 Responsável: ${caixa.funcionario}\n\n` +
-      `💰 *TOTAL GERAL: ${fmt(totalGeral)}*\n\n` +
-      `💵 Dinheiro: ${fmt(totalDinheiro)}\n` +
-      `💳 Débito: ${fmt(totalDebito)}\n` +
-      `💎 Crédito: ${fmt(totalCredito)}\n` +
-      `⚡ Pix: ${fmt(totalPix)}\n` +
-      `🪙 Crédito Cliente: ${fmt(totalFiado)}\n\n` +
-      `📎 PDF do relatório foi baixado automaticamente.`;
-
-    setTimeout(() => {
-
-      window.open(
-        `https://wa.me/5521971724498?text=${encodeURIComponent(msg)}`,
-        '_blank'
-      );
-
-    }, 900);
-
-  } else {
-
-    doc.save(filename);
-
-  }
-
-}
-
-function exportCaixaPDF(caixaId){
-
-  const cx =
-    (caixas || []).find(
-      c => String(c.id) === String(caixaId)
-    );
-
-  if(!cx){
-
-    toast('Caixa não encontrado');
-
-    return;
-
-  }
-
-  gerarRelatorioFechamentoPDF(
-    cx,
-    false
-  );
-
-  toast('📄 PDF gerado!');
-
-}
-
+// ── EXPORT PDF ────────────────────────────────────────────────────────────
 function exportVendasPDF(){
-
-  const { jsPDF } = jspdf;
-
-  const doc = new jsPDF('landscape');
-
-  const listaVendas = vendas || [];
-
-  doc.setFillColor(245,158,11);
-  doc.rect(0,0,300,20,'F');
-
-  doc.setTextColor(15,23,42);
-  doc.setFontSize(14);
-  doc.setFont('helvetica','bold');
-
-  doc.text(
-    'CantinaApp — Histórico de Vendas',
-    14,
-    13
-  );
-
-  doc.setTextColor(80);
-  doc.setFontSize(9);
-  doc.setFont('helvetica','normal');
-
-  doc.text(
-    'Gerado: ' + dateStr(Date.now()),
-    230,
-    13
-  );
-
-  const byM = {
-    dinheiro:0,
-    debito:0,
-    credito:0,
-    pix:0,
-    fiado:0
-  };
-
-  listaVendas.forEach(v => {
-
-    if(byM[v.pagamento] !== undefined){
-
-      byM[v.pagamento] +=
-        Number(v.total || 0);
-
-    }
-
-  });
-
-  const total = listaVendas.reduce(
-    (s,v) => s + Number(v.total || 0),
-    0
-  );
-
+  var doc = new jspdf.jsPDF();
+  doc.setFontSize(16); doc.text('Relatório de Vendas - CantinaApp', 14, 18);
   doc.autoTable({
-
-    startY:24,
-
-    head:[
-      ['Forma','Total']
-    ],
-
-    body:Object.entries(byM).map(
-      ([k,v]) => [
-        labelPgto(k),
-        fmt(v)
-      ]
-    ),
-
-    foot:[
-      ['TOTAL',fmt(total)]
-    ],
-
-    theme:'grid',
-
-    headStyles:{
-      fillColor:[30,41,59]
-    },
-
-    footStyles:{
-      fillColor:[245,158,11],
-      textColor:[15,23,42]
-    },
-
-    styles:{
-      fontSize:9
-    },
-
-    margin:{
-      right:150
-    }
-
+    startY:26, head:[['Data/Hora','Funcionário','Cliente','Total','Pagamento']],
+    body: vendas.map(function(v){ return [dateOnly(Number(v.data))+' '+timeOnly(Number(v.data)), v.funcionarioNome||'—', v.clienteNome||'—', fmt(v.total), v.pagamento]; }),
+    styles:{fontSize:9}
   });
-
-  doc.autoTable({
-
-    startY:24,
-
-    head:[[
-      'Data/Hora',
-      'Funcionário',
-      'Cliente',
-      'Itens',
-      'Total',
-      'Pagamento'
-    ]],
-
-    body:listaVendas
-      .slice()
-      .reverse()
-      .map(v => [
-
-        dateStr(Number(v.data)||v.data),
-
-        v.funcionario || '-',
-
-        v.cliente || '-',
-
-        (v.itens || [])
-          .map(i => i.qty + 'x ' + i.nome)
-          .join(', '),
-
-        fmt(v.total || 0),
-
-        labelPgto(v.pagamento)
-
-      ]),
-
-    theme:'striped',
-
-    headStyles:{
-      fillColor:[30,41,59]
-    },
-
-    styles:{
-      fontSize:8
-    },
-
-    tableWidth:280
-
-  });
-
-  doc.save(
-    'vendas_cantina.pdf'
-  );
-
+  doc.save('vendas-cantina.pdf');
 }
 
 function exportVendasXLSX(){
+  var rows = [['Data','Hora','Funcionário','Cliente','Total','Pagamento']].concat(
+    vendas.map(function(v){ return [dateOnly(Number(v.data)), timeOnly(Number(v.data)), v.funcionarioNome||'', v.clienteNome||'', v.total, v.pagamento]; })
+  );
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Vendas');
+  XLSX.writeFile(wb, 'vendas-cantina.xlsx');
+}
 
-  const listaVendas = vendas || [];
-
-  const rows = [[
-    'Data/Hora',
-    'Funcionário',
-    'Cliente',
-    'Itens',
-    'Total',
-    'Pagamento'
-  ]];
-
-  listaVendas
-    .slice()
-    .reverse()
-    .forEach(v => {
-
-      rows.push([
-
-        dateStr(Number(v.data)||v.data),
-
-        v.funcionario || '-',
-
-        v.cliente || '-',
-
-        (v.itens || [])
-          .map(i => i.qty + 'x ' + i.nome)
-          .join(', '),
-
-        Number(v.total || 0),
-
-        labelPgto(v.pagamento)
-
-      ]);
-
+function exportarRelatorioPDF(vc, totalV){
+  var doc = new jspdf.jsPDF();
+  doc.setFontSize(16); doc.text('Relatório de Fechamento - CantinaApp', 14, 18);
+  doc.setFontSize(11);
+  doc.text('Operador: '+(caixaAtual?caixaAtual.funcionario:'—'), 14, 30);
+  doc.text('Abertura: '+(caixaAtual?caixaAtual.abertura:'—'), 14, 38);
+  doc.text('Total de Vendas: '+vc.length, 14, 46);
+  doc.text('Total: '+fmt(totalV), 14, 54);
+  if(vc.length){
+    doc.autoTable({
+      startY:62, head:[['Hora','Cliente','Total','Pagamento']],
+      body: vc.map(function(v){ return [timeOnly(Number(v.data)), v.clienteNome||'—', fmt(v.total), v.pagamento]; }),
+      styles:{fontSize:9}
     });
-
-  const ws =
-    XLSX.utils.aoa_to_sheet(rows);
-
-  const wb =
-    XLSX.utils.book_new();
-
-  XLSX.utils.book_append_sheet(
-    wb,
-    ws,
-    'Vendas'
-  );
-
-  XLSX.writeFile(
-    wb,
-    'vendas_cantina.xlsx'
-  );
-
+  }
+  doc.save('fechamento-caixa.pdf');
 }
 
-// =====================================================
-// PWA — SERVICE WORKER + BACK BUTTON
-// =====================================================
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js').catch(e=>console.warn('SW:',e));
-  });
-}
+// ── NOTIFICAÇÕES ──────────────────────────────────────────────────────────
+function enviarNotificacao(tipo){ closeModal('notifyModal'); toast('Notificação '+tipo+' enviada'); }
 
-// History stack para botão voltar não sair do app
-const SCREENS=['loginScreen','pdvScreen','adminScreen'];
-// Estado inicial
-history.replaceState({screen:'loginScreen'},'');
-
-// Intercepta o showScreen original para empurrar histórico
-const _origShowScreen = showScreen;
-window.showScreen = function(id){
-  _origShowScreen(id);
-  if(history.state?.screen !== id){
-    history.pushState({screen:id},'');
-  }
-};
-
-window.addEventListener('popstate',(e)=>{
-  // Fecha qualquer modal aberto primeiro
-  const modais=document.querySelectorAll('.modal-bg:not(.hidden)');
-  if(modais.length>0){
-    modais.forEach(m=>m.classList.add('hidden'));
-    history.pushState(e.state,'');
-    return;
-  }
-  const screen = e.state?.screen;
-  // Se logado e popstate tentaria ir para login, mantém na tela atual
+// ── BACK BUTTON ───────────────────────────────────────────────────────────
+window.addEventListener('popstate', function(e){
+  var modais = document.querySelectorAll('.modal-bg:not(.hidden)');
+  if(modais.length){ modais.forEach(function(m){ m.classList.add('hidden'); }); history.pushState(e.state,''); return; }
+  var screen = e.state && e.state.screen;
   if(!screen || screen==='loginScreen'){
     if(currentUser){
-      const telaAtual = currentUser.role==='admin' ? 'adminScreen' : 'pdvScreen';
-      _origShowScreen(telaAtual);
-      history.pushState({screen:telaAtual},'');
-    } else {
-      _origShowScreen('loginScreen');
-      history.pushState({screen:'loginScreen'},'');
+      var tela = currentUser.role==='admin' ? 'adminScreen' : 'pdvScreen';
+      document.querySelectorAll('.screen').forEach(function(s){ s.classList.remove('active'); });
+      document.getElementById(tela).classList.add('active');
+      history.pushState({screen:tela},'');
     }
   } else {
-    _origShowScreen(screen);
+    document.querySelectorAll('.screen').forEach(function(s){ s.classList.remove('active'); });
+    var el = document.getElementById(screen);
+    if(el) el.classList.add('active');
   }
 });
 </script>
+
 </body>
 </html>
