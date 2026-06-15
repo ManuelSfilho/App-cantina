@@ -631,44 +631,7 @@ function parseExcelClientes(buf){
 }
 
 async function autoLoadExcel(){
-  const files=[
-    {file:'produtos.xlsx',  label:'Carregando produtos...',  pct:20, key:'produtos',  parser:parseExcelProdutos},
-    {file:'clientes.xlsx',  label:'Carregando clientes...',  pct:55, key:'clientes',  parser:parseExcelClientes},
-  ];
-  for(const f of files){
-    setLoading(f.label,f.pct);
-    try{
-      const resp=await fetch(f.file,{cache:'no-store'});
-      if(resp.ok){
-        const buf=await resp.arrayBuffer();
-        const data=f.parser(buf);
-        if(data.length>0){
-          // merge: preserva foto (base64) e dados locais já existentes
-          if(f.key==='clientes'){
-            const local=DB.get('clientes')||[];
-            const merged=data.map(ec=>{
-              const lc=local.find(l=>l.id===ec.id);
-              return lc?{...ec,usado:lc.usado}:ec;
-            });
-            DB.set(f.key,merged);
-          } else if(f.key==='produtos'){
-            const local=DB.get('produtos')||[];
-            const merged=data.map(ep=>{
-              const lp=local.find(l=>l.id===ep.id);
-              // preserva foto base64 e emoji cadastrado localmente
-              return lp?{...ep,foto:lp.foto||null,emoji:lp.emoji||ep.emoji}:ep;
-            });
-            // mantém produtos cadastrados localmente que não estão no Excel
-            local.forEach(lp=>{ if(!merged.find(m=>m.id===lp.id)) merged.push(lp); });
-            DB.set(f.key,merged);
-          } else {
-            DB.set(f.key,data);
-          }
-          console.log(`[CantinaApp] ${f.key}: ${data.length} registros do Excel`);
-        }
-      }
-    }catch(e){console.warn('Excel não encontrado:',f.file,e);}
-  }
+  return;
 }
 
 // =====================================================
@@ -691,8 +654,10 @@ function initDefaults(){
 (async()=>{
   setLoading('Iniciando CantinaApp...',5);
   initDefaults();
-  await autoLoadExcel();
-  setLoading('Verificando alertas de crédito...',75);
+
+// await autoLoadExcel();
+
+setLoading('Verificando alertas...',75);
   await new Promise(r=>setTimeout(r,200));
   checkAllCreditAlerts();
   setLoading('Pronto!',100);
