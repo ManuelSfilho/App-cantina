@@ -1,4 +1,4 @@
-const CACHE = 'cantina-v2';
+const CACHE = 'cantina-v3';
 const ASSETS = ['./', './index.html', './manifest.json', './produtos.xlsx', './clientes.xlsx'];
 
 self.addEventListener('install', e => {
